@@ -1,0 +1,36 @@
+name: Verify
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  macos:
+    name: Native app
+    runs-on: macos-26
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build and test
+        run: swift test
+      - name: Package app and connector
+        run: ./Scripts/package-app.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: QuotaBar-Connector
+          path: dist/QuotaBar-Connector.zip
+  connector:
+    name: Python connector
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python3 -m unittest discover -s Tests/BridgeTests -v

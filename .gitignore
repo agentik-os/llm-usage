@@ -1,0 +1,20 @@
+# Generated and private local state
+.build/
+.swiftpm/
+dist/
+Artifacts/
+Backups/
+.DS_Store
+__pycache__/
+*.py[cod]
+*.log
+.env
+.env.*
+!.env.example
+auth.json
+accounts.json
+pool.json
+active.json
+Sessions/
+*.pem
+*.key
