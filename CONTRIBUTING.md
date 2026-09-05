@@ -1,4 +1,4 @@
-# Contributing
+# Contributing to LLM Usage
 
 Issues and pull requests are welcome. For UI work, retain the monochrome design, accessibility labels, independent appearance settings and native glass fallback.
 

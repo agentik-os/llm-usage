@@ -4,6 +4,7 @@ import AppKit
 
 final class Keychain {
     static let shared = Keychain()
+    // Keep the pre-rename Keychain service so existing API accounts remain accessible.
     private let service = "com.openaiquotabar.keys"
     private func query(_ id: UUID) -> [String: Any] {
         [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: service, kSecAttrAccount as String: id.uuidString]
@@ -171,7 +172,7 @@ final class Store: ObservableObject {
         catch { storageError = "The sign-in recovery record couldn’t be cleared." }
     }
 
-    /// Resume only QuotaBar's explicitly recorded sign-in, never unrelated profiles.
+    /// Resume only LLM Usage's explicitly recorded sign-in, never unrelated profiles.
     func resumePendingSignIn() {
         guard !ephemeral, canPersist, loginAttempt == nil else { return }
         do {

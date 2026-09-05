@@ -86,7 +86,7 @@ struct DevicesView: View {
                     VStack(alignment: .leading, spacing: 8) {
                         Text("About live switching").font(.system(size: 11, weight: .semibold))
                         Text("Shared Codex terminals follow this selection. Older terminals and private app-server sessions need to reconnect to the shared daemon. Existing provider connections may retain their account until they reconnect.")
-                        Text("Keep QuotaBar running on your Mac to renew access on the VPS. Offline devices receive your latest choice when they reconnect.")
+                        Text("Keep LLM Usage running on your Mac to renew access on the VPS. Offline devices receive your latest choice when they reconnect.")
                     }.font(.system(size: 10)).foregroundStyle(Palette.secondary).padding(.top, 6)
                 }.padding(1)
             }.scrollIndicators(.hidden)

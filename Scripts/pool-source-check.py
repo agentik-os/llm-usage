@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Opt-in local check of saved QuotaBar routing grants; never print credentials.
+"""Opt-in local check of saved LLM Usage routing grants; never print credentials.
 
-Only QuotaBar's isolated sign-in profiles are opened. No tokens are refreshed,
+Only LLM Usage's isolated sign-in profiles are opened. No tokens are refreshed,
 no model calls are made, and no grants are sent to another device.
 """
 import argparse
@@ -16,7 +16,7 @@ import uuid
 
 
 async def check_account(codex, data_dir, session_id, timeout):
-    # Stored session IDs must not escape the local QuotaBar Sessions directory.
+    # Stored session IDs must not escape the local LLM Usage Sessions directory.
     session = str(uuid.UUID(session_id))
     if session.lower() != session_id.lower():
         raise ValueError("Invalid sign-in profile")
@@ -47,7 +47,7 @@ async def check_account(codex, data_dir, session_id, timeout):
                 return message["result"]
 
     try:
-        await asyncio.wait_for(call(1, "initialize", {"clientInfo": {"name": "quotabar_source_check", "version": "4.0.0"}}), timeout)
+        await asyncio.wait_for(call(1, "initialize", {"clientInfo": {"name": "quotabar_source_check", "version": "4.0.1"}}), timeout)
         process.stdin.write(b'{"method":"initialized"}\n')
         await process.stdin.drain()
         value = await asyncio.wait_for(call(2, "getAuthStatus", {"includeToken": True, "refreshToken": False}), timeout)
@@ -85,9 +85,9 @@ async def verify(args):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--live", action="store_true", help="Read grants from locally saved QuotaBar sign-in profiles")
+    parser.add_argument("--live", action="store_true", help="Read grants from locally saved LLM Usage sign-in profiles")
     parser.add_argument("--data-dir", type=Path, default=Path.home() / "Library/Application Support/OpenAIQuotaBar",
-                        help="Local QuotaBar data directory")
+                        help="Local LLM Usage data directory")
     parser.add_argument("--codex", help="Codex executable; otherwise discover on PATH")
     parser.add_argument("--timeout", type=float, default=15, help="Maximum seconds per app-server request (default: 15)")
     args = parser.parse_args()
@@ -100,7 +100,7 @@ def main():
         asyncio.run(verify(args))
     except Exception:
         # Exception messages/tracebacks may contain provider payloads or paths.
-        print(json.dumps({"ok": False, "error": "Local routing-grant check failed; verify the Codex executable and QuotaBar sign-in profiles.",
+        print(json.dumps({"ok": False, "error": "Local routing-grant check failed; verify the Codex executable and LLM Usage sign-in profiles.",
                           "credentialValuesPrinted": False}))
         raise SystemExit(1) from None
 

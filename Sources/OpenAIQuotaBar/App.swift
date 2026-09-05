@@ -2,7 +2,7 @@ import AppKit
 import SwiftUI
 
 @main
-struct QuotaBarApp {
+struct LLMUsageApp {
     @MainActor static func main() {
         let app = NSApplication.shared
         let delegate = AppDelegate()
@@ -31,7 +31,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let preview = arguments.contains("--preview")
         store = Store(ephemeral: preview)
         store.pool.grantProvider = { [weak store] id, selection in
-            guard let store else { throw UsageError.message("Open QuotaBar to switch accounts.") }
+            guard let store else { throw UsageError.message("Open LLM Usage to switch accounts.") }
             return try await store.routingGrant(id, selectionID: selection)
         }
         if preview {
@@ -63,7 +63,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // An activating panel gives editable account names normal keyboard focus,
         // including on macOS 27 where nonactivating panels can retain stale focus.
         panel = GlassPanel(contentRect: NSRect(x: 0, y: 0, width: 396, height: 660), styleMask: [.borderless], backing: .buffered, defer: false)
-        panel.title = preview ? "QuotaBar · Design Preview" : "QuotaBar"
+        panel.title = preview ? "LLM Usage · Design Preview" : "LLM Usage"
         panel.isOpaque = false
         panel.backgroundColor = .clear
         panel.hasShadow = true
@@ -114,12 +114,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             store.pool.start()
             statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
             if let button = statusItem?.button {
-                let image = NSImage(systemSymbolName: "gauge.with.dots.needle.67percent", accessibilityDescription: "QuotaBar — OpenAI usage")
+                let image = NSImage(systemSymbolName: "gauge.with.dots.needle.67percent", accessibilityDescription: "LLM Usage — Accounts and usage")
                 image?.isTemplate = true
                 button.image = image
                 button.target = self
                 button.action = #selector(togglePanel)
-                button.toolTip = "QuotaBar · OpenAI usage"
+                button.toolTip = "LLM Usage · Accounts and usage"
             }
             refreshTimer = Timer.scheduledTimer(withTimeInterval: 300, repeats: true) { [weak self] _ in
                 Task { @MainActor in await self?.store.refreshStale() }

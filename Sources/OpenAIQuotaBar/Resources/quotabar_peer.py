@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""QuotaBar's private, user-scoped Codex connector. Stdlib only; no TCP listener.
+"""LLM Usage's private, user-scoped Codex connector. Stdlib only; no TCP listener.
 
 Commands exchange JSON over stdin or an owner-only Unix socket. Credentials are
 never printed, passed in process arguments, or sent anywhere except Codex and
@@ -21,7 +21,7 @@ import sys
 import tempfile
 import time
 
-VERSION = "4.0.0"
+VERSION = "4.0.1"
 MAX_MESSAGE = 131072
 
 
@@ -128,7 +128,7 @@ class CodexConnection:
             raise RuntimeError("Codex does not support this control connection.")
         self.reader_task = asyncio.create_task(self.read())
         await self.request("initialize", {
-            "clientInfo": {"name": "quotabar_peer", "title": "QuotaBar", "version": VERSION},
+            "clientInfo": {"name": "quotabar_peer", "title": "LLM Usage", "version": VERSION},
             "capabilities": {"experimentalApi": True},
         })
         await self.send({"method": "initialized"})
@@ -209,7 +209,7 @@ class CodexConnection:
                         }})
                     else:
                         await self.send({"id": message["id"], "error": {
-                            "code": -32601, "message": "Refresh the selected account in QuotaBar.",
+                            "code": -32601, "message": "Refresh the selected account in LLM Usage.",
                         }})
                 else:
                     future = self.pending.get(message.get("id"))
@@ -275,7 +275,7 @@ class Peer:
             "expiresAt": self.grant["expiresAt"] if self.grant else None,
             "lastConfirmed": self.last_confirmed,
             "state": "expired" if expired else "attention" if self.error else "active" if self.applied and self.codex.connected else "ready",
-            "error": "Open QuotaBar on your Mac to renew this account." if expired else self.error,
+            "error": "Open LLM Usage on your Mac to renew this account." if expired else self.error,
             "hermesInstalled": ((Path.home() / ".hermes/plugins/quotabar/plugin.yaml").exists()
                                 and (self.state / "hermes-enabled.json").exists()),
         }
@@ -382,7 +382,7 @@ async def rpc(state, request):
 
 # Standalone Hermes plugin: per-request headers through supported middleware.
 # No edits to Hermes core, provider choice, conversations, or saved credentials.
-PLUGIN = r'''"""QuotaBar account selection for native Hermes Codex Responses requests."""
+PLUGIN = r'''"""LLM Usage account selection for native Hermes Codex Responses requests."""
 import json
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -425,7 +425,7 @@ def install_hermes():
     plugin = root / "plugins/quotabar"
     plugin.mkdir(parents=True, exist_ok=True, mode=0o700)
     (plugin / "__init__.py").write_text(PLUGIN)
-    (plugin / "plugin.yaml").write_text('name: quotabar\nversion: "4.0.0"\ndescription: "Use the OpenAI account selected in QuotaBar for Codex Responses requests."\nauthor: QuotaBar\n')
+    (plugin / "plugin.yaml").write_text('name: quotabar\nversion: "4.0.1"\ndescription: "Use the OpenAI account selected in LLM Usage for Codex Responses requests."\nauthor: LLM Usage\n')
     # Use Hermes's own configuration command; it preserves unrelated settings.
     # This plugin only routes requests and needs no built-in tool overrides.
     # Explicitly decline that CLI prompt and close stdin: an invisible prompt
@@ -478,7 +478,7 @@ def install():
         unit.parent.mkdir(parents=True, exist_ok=True)
         # Paths come from this installation, not untrusted command input.
         quote = lambda v: '"' + str(v).replace('\\', '\\\\').replace('"', '\\"').replace('%', '%%') + '"'
-        unit.write_text('[Unit]\nDescription=QuotaBar account connector\nAfter=default.target\n\n[Service]\n'
+        unit.write_text('[Unit]\nDescription=LLM Usage account connector\nAfter=default.target\n\n[Service]\n'
             + 'ExecStart=' + ' '.join(map(quote, [sys.executable, dest, "serve", "--codex", codex]))
             + '\nRestart=on-failure\nRestartSec=5\nUMask=0077\nNoNewPrivileges=true\n\n[Install]\nWantedBy=default.target\n')
         subprocess.run(["systemctl", "--user", "daemon-reload"], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -488,7 +488,7 @@ def install():
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Private QuotaBar account connector")
+    parser = argparse.ArgumentParser(description="Private LLM Usage account connector")
     parser.add_argument("command", choices=["serve", "rpc", "status", "install", "install-hermes"])
     parser.add_argument("--state", type=Path, default=default_state())
     parser.add_argument("--codex")

@@ -58,7 +58,7 @@ struct AppSettingsView: View {
                         .accessibilityIdentifier("theme-\(theme.rawValue)")
                 }
             }.padding(.top, 16)
-            Text(store.theme == .system ? "Follows your Mac’s appearance." : "Only QuotaBar changes. Your Mac keeps its theme.")
+            Text(store.theme == .system ? "Follows your Mac’s appearance." : "Only LLM Usage changes. Your Mac keeps its theme.")
                 .font(.system(size: 10)).foregroundStyle(Palette.secondary).padding(.top, 12)
             if let error { Text(error).font(.caption).padding(.top, 10) }
             Button { pool.showingDevices = true } label: {

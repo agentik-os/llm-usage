@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Stage, verify and install QuotaBar's connector on an existing SSH host."""
+"""Stage, verify and install LLM Usage's connector on an existing SSH host."""
 import argparse
 import io
 import json

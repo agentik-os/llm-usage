@@ -22,8 +22,8 @@ jobs:
         run: ./Scripts/package-app.sh
       - uses: actions/upload-artifact@v4
         with:
-          name: QuotaBar-Connector
-          path: dist/QuotaBar-Connector.zip
+          name: LLM-Usage-Connector
+          path: dist/LLM-Usage-Connector.zip
   connector:
     name: Python connector
     runs-on: ubuntu-24.04

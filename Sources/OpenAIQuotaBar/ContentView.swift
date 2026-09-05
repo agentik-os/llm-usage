@@ -59,7 +59,7 @@ struct ContentView: View {
                     .accessibilityHidden(true)
             }
             VStack(alignment: .leading, spacing: 2) {
-                Text("QuotaBar").font(.system(size: 16, weight: .semibold, design: .rounded))
+                Text("LLM Usage").font(.system(size: 16, weight: .semibold, design: .rounded))
                 Text("A little clarity for your AI.").font(.system(size: 10)).foregroundStyle(Palette.secondary)
             }
             Spacer()
@@ -79,7 +79,7 @@ struct ContentView: View {
                 Button(store.showingDemo ? "Leave preview" : "Explore a preview") { store.showingDemo.toggle() }
                 Button("Close panel") { close() }.keyboardShortcut(.escape, modifiers: [])
                 Divider()
-                Button("Quit QuotaBar") { NSApp.terminate(nil) }.keyboardShortcut("q")
+                Button("Quit LLM Usage") { NSApp.terminate(nil) }.keyboardShortcut("q")
             } label: {
                 Image(systemName: "ellipsis").font(.system(size: 14, weight: .medium)).frame(width: 28, height: 30)
             }

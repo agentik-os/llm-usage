@@ -156,7 +156,7 @@ struct ConnectedAccountView: View {
                         removing = false
                     }
                 }
-            } message: { Text("This only signs the account out of QuotaBar.") }
+            } message: { Text("This only signs the account out of LLM Usage.") }
     }
 
     private func saveName() {

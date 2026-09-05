@@ -308,7 +308,7 @@ final class AccountPool: ObservableObject {
         if connection.checking { return "Connecting…" }
         guard connection.reachable else { return accountID == nil ? "Not connected" : "Offline · switch pending" }
         guard let status = connection.status else { return "Ready" }
-        if status.state == "expired" { return "Account expired · open QuotaBar" }
+        if status.state == "expired" { return "Account expired · open LLM Usage" }
         if status.state == "attention" { return "Needs attention" }
         if let accountID, status.accountID == accountID.uuidString, status.selectionID == selectionID, status.codexConnected == true {
             return "Using \(status.name ?? "selected account")"

@@ -64,7 +64,7 @@ final class CodexClient {
         }
         do {
             try process.run()
-            _ = try await request("initialize", params: ["clientInfo": ["name": "quotabar", "title": "QuotaBar", "version": "4.0.0"]])
+            _ = try await request("initialize", params: ["clientInfo": ["name": "quotabar", "title": "LLM Usage", "version": "4.0.1"]])
             try send(["method": "initialized", "params": [:]])
         } catch { stop(); throw error }
     }
@@ -109,7 +109,7 @@ final class CodexClient {
             if let method = message["method"] as? String {
                 if let id = message["id"] {
                     // This usage-only client never grants tool or other server-initiated requests.
-                    try? send(["id": id, "error": ["code": -32601, "message": "Not supported by QuotaBar"]])
+                    try? send(["id": id, "error": ["code": -32601, "message": "Not supported by LLM Usage"]])
                 } else if let data = try? JSONSerialization.data(withJSONObject: message["params"] ?? [:]) {
                     notification?(method, data)
                 }
