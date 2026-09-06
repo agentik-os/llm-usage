@@ -119,7 +119,17 @@ struct DevicesView: View {
                 if connection?.checking == true { ProgressView().controlSize(.small) }
                 else { Image(systemName: connection?.reachable == true ? "checkmark.circle" : "circle.dotted").foregroundStyle(Palette.secondary) }
             }
-            if !device.isLocal { Text(device.sshHost).font(.system(size: 9, design: .monospaced)).foregroundStyle(Palette.secondary) }
+            if !device.isLocal {
+                HStack {
+                    Text(device.sshHost).font(.system(size: 9, design: .monospaced)).foregroundStyle(Palette.secondary)
+                    Spacer()
+                    Button { pool.remove(device) } label: {
+                        Label("Remove", systemImage: "minus.circle").font(.system(size: 11, weight: .medium))
+                    }.buttonStyle(.plain).disabled(pool.isWorking)
+                        .accessibilityLabel("Remove \(device.name)").accessibilityIdentifier("remove-device-\(device.id)")
+                        .help("Stop syncing this VPS. Keeps its SSH setup and running sessions. You can add it again from Connect a VPS.")
+                }
+            }
             if let last = connection?.status?.lastConfirmed {
                 Text("Confirmed \(Date(timeIntervalSince1970: last).formatted(date: .abbreviated, time: .shortened))")
                     .font(.system(size: 9)).foregroundStyle(Palette.secondary)

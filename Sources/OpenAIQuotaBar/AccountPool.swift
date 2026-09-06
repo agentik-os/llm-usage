@@ -310,6 +310,22 @@ final class AccountPool: ObservableObject {
         } catch { self.error = "Couldn’t connect this VPS. Verify SSH access, Python 3.9+, Codex, and a user systemd session." }
     }
 
+    func remove(_ device: PoolDevice) {
+        guard !isWorking, !device.isLocal, devices.contains(where: { $0.id == device.id }) else { return }
+        var choices = selections
+        choices.removeValue(forKey: device.id)
+        let remaining = devices.filter { $0.id != device.id }
+        do {
+            // Save first. No SSH call, logout, or remote service change is needed.
+            try save(account: accountID, selection: selectionID, devices: remaining, choices: choices)
+            devices = remaining
+            selections = choices
+            connections.removeValue(forKey: device.id)
+            previewRuntime.removeValue(forKey: device.id)
+            error = nil
+        } catch { self.error = "Couldn’t remove this VPS. Your device list has been preserved." }
+    }
+
     private func currentGrant(for device: PoolDevice) async throws -> PoolGrant? {
         guard let choice = selections[device.id], let grantProvider else { return nil }
         return try await grantProvider(choice.accountID, choice.selectionID)

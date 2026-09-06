@@ -67,6 +67,8 @@ Keep LLM Usage running to renew access on remote devices. They can use the last 
 
 See [connector setup, compatibility and removal](CONNECTOR.md) for standalone VPS installation and Hermes details.
 
+Use **Remove** on a connected VPS card to forget it in LLM Usage. This clears its saved account selection and stops future synchronization and token renewal. Its SSH setup, connector and running sessions remain in place; the last access grant stays valid until expiry. You can add it again from the existing SSH setups list. This Mac cannot be removed.
+
 ## Model, reasoning and access settings
 
 Open **Settings → Codex defaults**, select a device and click **Load settings**. The model list and supported reasoning efforts come from Codex on that device. **Full access** permits access outside the workspace; **YOLO mode** combines full access with no approval prompts. Click **Apply to <device>** to save the explicit changes. A concurrent config edit requires reloading before saving.

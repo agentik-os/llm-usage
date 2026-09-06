@@ -2,6 +2,48 @@ import XCTest
 @testable import OpenAIQuotaBar
 
 final class PoolTests: XCTestCase {
+    @MainActor func testRemovingOfflineVPSPersistsAndStopsFutureSyncWithoutRemoteCommands() async throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("llm-remove-\(UUID())")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let file = folder.appendingPathComponent("pool.json")
+        let vps = PoolDevice(name: "Fixture VPS", sshHost: "fixture")
+        let account = Account.samples[0]
+        try JSONSerialization.data(withJSONObject: ["accountID": account.id.uuidString, "selectionID": "fixture",
+            "devices": [["id": vps.id.uuidString, "name": vps.name, "sshHost": vps.sshHost]]]).write(to: file)
+        let pool = AccountPool(file: file)
+        pool.transport = { _, _, _ in XCTFail("Removal must never run a remote command"); throw CancellationError() }
+        pool.remove(vps)
+        XCTAssertEqual(pool.devices, [.local])
+        XCTAssertNil(pool.selections[vps.id])
+        XCTAssertNil(pool.connections[vps.id])
+        XCTAssertEqual(pool.accountID, account.id)
+        let restored = AccountPool(file: file)
+        XCTAssertEqual(restored.devices, [.local])
+        XCTAssertNil(restored.selections[vps.id])
+        restored.remove(.local)
+        XCTAssertEqual(restored.devices, [.local])
+        restored.transport = { device, command, _ in
+            XCTAssertTrue(device.isLocal, "Removed VPS must never be polled or switched")
+            XCTAssertEqual(command, "status")
+            return Data("{\"ok\":true,\"result\":{\"state\":\"ready\"}}".utf8)
+        }
+        await restored.synchronize()
+    }
+
+    @MainActor func testRemovedPreviewVPSCanBeAddedAgain() async {
+        let pool = AccountPool(preview: true)
+        await pool.connect(name: "Fixture", host: "fixture")
+        let vps = pool.devices.last!
+        await pool.use(Account.samples[0], on: [vps.id])
+        pool.remove(vps)
+        XCTAssertFalse(pool.isInUse(Account.samples[0].id))
+        await pool.connect(name: "Fixture", host: "fixture")
+        XCTAssertEqual(pool.devices.count, 2)
+        XCTAssertNotEqual(pool.devices.last?.id, vps.id)
+        XCTAssertEqual(pool.devices.last?.sshHost, "fixture")
+    }
+
     func token(_ claims: [String: Any]) throws -> String {
         let data = try JSONSerialization.data(withJSONObject: claims)
         return "test." + data.base64EncodedString().replacingOccurrences(of: "+", with: "-").replacingOccurrences(of: "/", with: "_").replacingOccurrences(of: "=", with: "") + ".test"
