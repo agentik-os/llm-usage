@@ -12,7 +12,9 @@ LLM Usage is a native Swift app with a monochrome interface, Liquid Glass on mac
 - Browser sign-in with a short device code, plus a browser callback fallback.
 - Multiple accounts together, with usage bars and reset dates in your local time zone.
 - Editable account names and System, Light or Dark appearance independent of macOS.
-- **Use this account** switches the shared Codex account without closing its conversations.
+- An animated **Active** badge shows confirmed accounts and the devices using them.
+- **Use this account** targets this Mac, all devices, one VPS, or a custom selection without closing conversations.
+- Choose model, reasoning effort, Full access and YOLO defaults per device in Settings.
 - Connected Macs and Linux VPS devices, with per-device confirmations and reconnect retries over SSH.
 - Optional Hermes middleware for its native Codex Responses integration.
 
@@ -51,7 +53,7 @@ Usage refreshes every five minutes and when opening stale data. Use the gear to 
 
 ## Switch accounts across devices
 
-Open an account and choose **Use this account**. **Your devices** shows which devices have confirmed that selection. Add a Linux VPS using an existing SSH alias or `user@hostname`; LLM Usage installs a private connector for that user.
+Open an account, choose **This Mac**, **All devices**, **Only <VPS>**, or toggle a custom set of devices, then choose **Use this account**. Each machine keeps its own account choice, including across app restarts. Offline targets retry their saved choice when they reconnect; other machines retain their selection. **Your devices** shows which devices have confirmed. The **Active** badge appears only after confirmation; a pending selection is not shown as active. In **Connect a VPS**, LLM Usage lists concrete host aliases from this Mac’s `~/.ssh/config`, included config files, and system SSH configuration. Search and select one or several existing setups; already-added aliases are marked. Detection reads configuration only, without running SSH, `Match exec`, proxy commands, or network probes. The connection uses the original alias so SSH retains its existing keys, ports and jump hosts. A manual alias or `user@hostname` entry remains available. Connecting installs a private connector for that Linux user; detection alone does not install anything.
 
 Shared Codex terminals follow the selection. Already-running requests and provider connections can retain the previous account until they reconnect. Older standalone terminals and private app-server processes are outside the shared daemon. To connect explicitly:
 
@@ -64,6 +66,14 @@ codex --remote unix:// resume <session-id>
 Keep LLM Usage running to renew access on remote devices. They can use the last expiring grant while the Mac is offline, but cannot refresh it themselves. Hermes needs to load its optional plugin once; installation does not restart existing gateways or sessions.
 
 See [connector setup, compatibility and removal](CONNECTOR.md) for standalone VPS installation and Hermes details.
+
+Use **Remove** on a connected VPS card to forget it in LLM Usage. This clears its saved account selection and stops future synchronization and token renewal. Its SSH setup, connector and running sessions remain in place; the last access grant stays valid until expiry. You can add it again from the existing SSH setups list. This Mac cannot be removed.
+
+## Model, reasoning and access settings
+
+Open **Settings → Codex defaults**, select a device and click **Load settings**. The model list and supported reasoning efforts come from Codex on that device. **Full access** permits access outside the workspace; **YOLO mode** combines full access with no approval prompts. Click **Apply to <device>** to save the explicit changes. A concurrent config edit requires reloading before saving.
+
+These are defaults for **new conversations**. Existing sessions keep their settings; the app never reloads loaded threads or restarts the shared daemon when applying defaults. Project policies, managed settings and explicit session options can override defaults. Remote settings use a short SSH control connection with the bundled helper, so existing account connectors do not need restarting. Settings require Codex support for `model/list`, `config/read` and `config/batchWrite`. Preview mode uses in-memory sample settings and never contacts Codex.
 
 ## Account privacy
 

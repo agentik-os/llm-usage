@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Exercise account management in an isolated, in-memory native preview."""
-import pathlib, subprocess, tempfile, time, json, sys
+import pathlib, subprocess, tempfile, time, json, sys, os
 root = pathlib.Path(__file__).resolve().parents[1]
 (root / 'Artifacts').mkdir(exist_ok=True)
 def mac_theme():
@@ -10,7 +10,7 @@ original_theme = mac_theme()
 rename_only = '--rename-only' in sys.argv
 with tempfile.TemporaryDirectory(prefix='quotabar-interaction-') as temp:
     ready = pathlib.Path(temp) / 'ready'
-    arguments = [str(root / '.build/debug/OpenAIQuotaBar'), '--preview', '--five-accounts', '--window-id-file', str(ready)]
+    arguments = [os.environ.get('LLM_USAGE_TEST_BINARY', str(root / '.build/debug/OpenAIQuotaBar')), '--preview', '--five-accounts', '--window-id-file', str(ready)]
     if rename_only: arguments += ['--settings']
     p = subprocess.Popen(arguments, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     def apple(body):
@@ -59,7 +59,7 @@ error "Control not found: {identifier}"''')
             click('account-row-55555555-5555-5555-5555-555555555555')
             assert 'Side projects' in content() and 'remaining' in content().lower()
             click('use-account')
-            assert 'Selected account' in content() and '1 of 1 devices confirmed' in content()
+            assert 'Active' in content() and '1 devices active' in content()
             click('account-devices')
             assert 'Your devices' in content() and 'Using Side projects' in content()
             click('devices-back')
@@ -67,11 +67,21 @@ error "Control not found: {identifier}"''')
             assert 'Your accounts' in content()
             click('account-row-11111111-1111-1111-1111-111111111111')
             click('use-account')
-            assert 'Selected account' in content()
+            assert 'Active' in content()
             click('account-devices')
             assert 'Using Personal workspace' in content()
             click('devices-back')
             click('all-accounts')
+            click('home-devices')
+            click('add-device')
+            assert 'sample-vps' in content() and 'sample-worker' in content()
+            click('ssh-host-sample-vps')
+            click('ssh-host-sample-worker')
+            click('connect-selected-devices')
+            assert 'Added 2 devices.' in content()
+            assert next(row for row in snapshot() if row['id'] == 'ssh-host-sample-vps')['value'] == 'Already added'
+            click('devices-back')
+            print('PASS: existing SSH setups support multi-selection without real SSH calls', flush=True)
             print('PASS: account selection and device confirmations update without closing the panel', flush=True)
             print('PASS: all five accounts show usage and open their own details', flush=True)
             click('app-settings')
@@ -85,6 +95,17 @@ error "Control not found: {identifier}"''')
             assert selected('theme-system')
             assert mac_theme() == original_theme
             print('PASS: theme switches live without changing the Mac theme', flush=True)
+            click('runtime-load')
+            assert 'Sample model' in content()
+            click('runtime-yolo')
+            click('runtime-apply')
+            assert 'Saved for new conversations on This Mac.' in content()
+            click('runtime-load')
+            assert next(row for row in snapshot() if row['id'] == 'runtime-yolo')['value'] == '1'
+            click('runtime-yolo')
+            click('runtime-full-access')
+            click('runtime-apply')
+            print('PASS: model settings and YOLO are editable using isolated preview data', flush=True)
             click('rename-11111111-1111-1111-1111-111111111111')
         else:
             click('rename-11111111-1111-1111-1111-111111111111')

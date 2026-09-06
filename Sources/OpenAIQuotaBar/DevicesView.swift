@@ -1,26 +1,55 @@
 import SwiftUI
 
+struct ActiveAccountBadge: View {
+    let names: String
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var appeared = false
+    var body: some View {
+        Label("Active", systemImage: "checkmark.circle.fill")
+            .font(.system(size: 10, weight: .semibold))
+            .scaleEffect(appeared ? 1 : 0.8).opacity(appeared ? 1 : 0)
+            .onAppear { withAnimation(reduceMotion ? nil : .spring(response: 0.4, dampingFraction: 0.6)) { appeared = true } }
+            .help("Active on: \(names)").accessibilityLabel("Active on \(names)")
+    }
+}
+
 struct AccountSwitchButton: View {
     let account: Account
     @EnvironmentObject private var pool: AccountPool
+    @State private var targets: Set<UUID> = [PoolDevice.local.id]
 
     var body: some View {
         VStack(spacing: 8) {
-            Button { Task { await pool.use(account) } } label: {
+            let active = pool.activeDevices(for: account.id)
+            if !active.isEmpty { ActiveAccountBadge(names: active.map(\.name).joined(separator: ", ")) }
+            Menu {
+                Button("This Mac") { targets = [PoolDevice.local.id] }
+                Button("All devices") { targets = Set(pool.devices.map(\.id)) }
+                ForEach(pool.devices.filter { !$0.isLocal }) { device in
+                    Button("Only \(device.name)") { targets = [device.id] }
+                }
+                Divider()
+                ForEach(pool.devices) { device in
+                    Toggle(device.name, isOn: Binding(get: { targets.contains(device.id) }, set: { selected in
+                        if selected { targets.insert(device.id) } else { targets.remove(device.id) }
+                    }))
+                }
+            } label: {
+                Label(targets.count == pool.devices.count ? "All devices" : pool.devices.filter { targets.contains($0.id) }.map(\.name).joined(separator: ", ").nonEmptyTarget,
+                      systemImage: "desktopcomputer")
+                    .font(.system(size: 11)).lineLimit(2)
+            }.disabled(pool.isWorking).accessibilityIdentifier("switch-targets")
+            Button { Task { await pool.use(account, on: targets) } } label: {
                 HStack(spacing: 8) {
                     if pool.isWorking { ProgressView().controlSize(.small) }
-                    else { Image(systemName: pool.accountID == account.id ? "checkmark.circle" : "arrow.triangle.swap") }
-                    Text(pool.isWorking ? "Connecting…" : pool.accountID == account.id ? "Selected account" : "Use this account")
+                    else { Image(systemName: "arrow.triangle.swap") }
+                    Text(pool.isWorking ? "Connecting…" : "Use this account")
                 }
-            }.buttonStyle(PrimaryButtonStyle()).disabled(pool.isWorking)
+            }.buttonStyle(PrimaryButtonStyle()).disabled(pool.isWorking || targets.isEmpty)
                 .accessibilityIdentifier("use-account").accessibilityLabel("Use this account")
-                .accessibilityValue(pool.accountID == account.id ? "Selected account" : "Not selected")
             Button { pool.showingDevices = true } label: {
-                HStack(spacing: 5) {
-                    Image(systemName: "desktopcomputer")
-                    Text(pool.accountID == account.id ? "\(pool.confirmedCount) of \(pool.devices.count) devices confirmed" : "Codex terminals · Connected devices")
-                    Image(systemName: "chevron.right").font(.system(size: 7, weight: .semibold))
-                }.font(.system(size: 10)).foregroundStyle(Palette.secondary)
+                Label("\(active.count) devices active · Details", systemImage: "desktopcomputer")
+                    .font(.system(size: 10)).foregroundStyle(Palette.secondary)
             }.buttonStyle(.plain).accessibilityIdentifier("account-devices")
             if let error = pool.error {
                 Text(error).font(.system(size: 10)).foregroundStyle(Palette.secondary)
@@ -30,10 +59,12 @@ struct AccountSwitchButton: View {
     }
 }
 
+private extension String {
+    var nonEmptyTarget: String { isEmpty ? "Choose devices" : self }
+}
+
 struct DevicesView: View {
     @EnvironmentObject private var pool: AccountPool
-    @State private var name = ""
-    @State private var host = ""
     @State private var adding = false
 
     var body: some View {
@@ -46,7 +77,7 @@ struct DevicesView: View {
                 Button { Task { await pool.synchronize() } } label: { Image(systemName: "arrow.clockwise") }
                     .buttonStyle(QuietButtonStyle()).disabled(pool.isWorking).accessibilityLabel("Refresh devices")
             }.padding(.bottom, 20)
-            Text("One account. Across your devices.")
+            Text("Your devices. Your choice.")
                 .font(.system(size: 13, weight: .medium)).padding(.bottom, 6)
             Text("Switch the shared Codex connection. Running work stays open; requests already in progress finish on their original account.")
                 .font(.system(size: 11)).foregroundStyle(Palette.secondary).fixedSize(horizontal: false, vertical: true)
@@ -55,26 +86,7 @@ struct DevicesView: View {
                 VStack(alignment: .leading, spacing: 12) {
                     ForEach(pool.devices) { device in deviceCard(device) }
                     if adding {
-                        VStack(alignment: .leading, spacing: 12) {
-                            Text("Connect a VPS").font(.system(size: 13, weight: .semibold))
-                            TextField("Name, e.g. My VPS", text: $name).textFieldStyle(.plain)
-                                .padding(10).softSurface(radius: 10).accessibilityIdentifier("device-name")
-                            TextField("SSH alias or user@hostname", text: $host).textFieldStyle(.plain)
-                                .padding(10).softSurface(radius: 10).accessibilityIdentifier("device-host")
-                            Text("Uses your existing SSH access. Installs a private connector for that Linux user. Python 3.9+, Codex and systemd are required.")
-                                .font(.system(size: 10)).foregroundStyle(Palette.secondary)
-                            HStack {
-                                Button("Cancel") { adding = false }.buttonStyle(.plain)
-                                Spacer()
-                                Button("Connect") {
-                                    Task {
-                                        await pool.connect(name: name, host: host)
-                                        if pool.error == nil { adding = false; name = ""; host = "" }
-                                    }
-                                }.buttonStyle(.plain).fontWeight(.semibold)
-                                    .disabled(pool.isWorking || host.isEmpty).accessibilityIdentifier("connect-device")
-                            }
-                        }.padding(15).softSurface(radius: 18)
+                        ConnectDeviceView { adding = false }
                     } else {
                         Button { adding = true } label: {
                             Label("Connect a VPS", systemImage: "plus").frame(maxWidth: .infinity).padding(.vertical, 13)
@@ -107,7 +119,17 @@ struct DevicesView: View {
                 if connection?.checking == true { ProgressView().controlSize(.small) }
                 else { Image(systemName: connection?.reachable == true ? "checkmark.circle" : "circle.dotted").foregroundStyle(Palette.secondary) }
             }
-            if !device.isLocal { Text(device.sshHost).font(.system(size: 9, design: .monospaced)).foregroundStyle(Palette.secondary) }
+            if !device.isLocal {
+                HStack {
+                    Text(device.sshHost).font(.system(size: 9, design: .monospaced)).foregroundStyle(Palette.secondary)
+                    Spacer()
+                    Button { pool.remove(device) } label: {
+                        Label("Remove", systemImage: "minus.circle").font(.system(size: 11, weight: .medium))
+                    }.buttonStyle(.plain).disabled(pool.isWorking)
+                        .accessibilityLabel("Remove \(device.name)").accessibilityIdentifier("remove-device-\(device.id)")
+                        .help("Stop syncing this VPS. Keeps its SSH setup and running sessions. You can add it again from Connect a VPS.")
+                }
+            }
             if let last = connection?.status?.lastConfirmed {
                 Text("Confirmed \(Date(timeIntervalSince1970: last).formatted(date: .abbreviated, time: .shortened))")
                     .font(.system(size: 9)).foregroundStyle(Palette.secondary)
