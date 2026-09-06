@@ -21,7 +21,7 @@ import sys
 import tempfile
 import time
 
-VERSION = "4.0.1"
+VERSION = "4.1.0"
 MAX_MESSAGE = 131072
 
 
@@ -487,9 +487,77 @@ def install():
     return {"version": VERSION, "installed": True}
 
 
+class RuntimeSettingsError(ValueError):
+    pass
+
+
+async def runtime_snapshot(codex):
+    response = await codex.request("config/read", {"includeLayers": True})
+    config = response.get("config", {})
+    layers = [layer for layer in response.get("layers") or []
+              if layer.get("name", {}).get("type") == "user" and not layer.get("name", {}).get("profile")]
+    layer = layers[-1] if layers else {}
+    models, cursor, seen = [], None, set()
+    while True:
+        page = await codex.request("model/list", {"limit": 100, "cursor": cursor})
+        for model in page.get("data", []):
+            models.append({key: model.get(key) for key in
+                ("id", "model", "displayName", "defaultReasoningEffort", "supportedReasoningEfforts", "isDefault")})
+        cursor = page.get("nextCursor")
+        if not cursor:
+            break
+        if cursor in seen or len(models) > 1000:
+            raise RuntimeSettingsError("Invalid model catalog.")
+        seen.add(cursor)
+    return {"model": config.get("model"), "effort": config.get("model_reasoning_effort"),
+            "sandbox": config.get("sandbox_mode"), "approval": config.get("approval_policy") if isinstance(config.get("approval_policy"), str) else "custom",
+            "version": layer.get("version"), "models": models}
+
+
+async def runtime_settings(codex, request):
+    # Dedicated control connection. Never reload or mutate any loaded thread.
+    await codex.start()
+    snapshot = await runtime_snapshot(codex)
+    changes = request.get("changes")
+    if changes is None:
+        return snapshot
+    if not snapshot["version"] or request.get("version") != snapshot["version"]:
+        raise RuntimeSettingsError("Settings changed elsewhere. Reload before saving.")
+    if not isinstance(changes, dict) or not changes or set(changes) - {"model", "effort", "sandbox", "approval"}:
+        raise RuntimeSettingsError("Unsupported settings.")
+    model_id = changes.get("model", snapshot["model"])
+    model = next((m for m in snapshot["models"] if m["model"] == model_id), None)
+    if "model" in changes or "effort" in changes:
+        if model is None:
+            raise RuntimeSettingsError("This model is unavailable on this device.")
+        if "effort" in changes and changes["effort"] not in [e["reasoningEffort"] for e in model["supportedReasoningEfforts"]]:
+            raise RuntimeSettingsError("This reasoning effort is unavailable for this model.")
+        if "model" in changes and "effort" not in changes:
+            raise RuntimeSettingsError("Choose a reasoning effort for the new model.")
+    if "sandbox" in changes and changes["sandbox"] not in ("read-only", "workspace-write", "danger-full-access"):
+        raise RuntimeSettingsError("Unsupported access mode.")
+    if "approval" in changes and changes["approval"] not in ("untrusted", "on-request", "never"):
+        raise RuntimeSettingsError("Unsupported approval mode.")
+    keys = {"model": "model", "effort": "model_reasoning_effort", "sandbox": "sandbox_mode", "approval": "approval_policy"}
+    await codex.request("config/batchWrite", {"expectedVersion": snapshot["version"], "reloadUserConfig": False,
+        "edits": [{"keyPath": keys[key], "value": value, "mergeStrategy": "replace"} for key, value in changes.items()]})
+    result = await runtime_snapshot(codex)
+    if any(result.get(key) != value for key, value in changes.items()):
+        raise RuntimeSettingsError("Saved, but a managed setting or profile overrides this choice.")
+    return result
+
+
+async def runtime_command(args, request):
+    codex = CodexConnection(args.codex or find_codex(), args.codex_socket, lambda: None)
+    try:
+        return await runtime_settings(codex, request)
+    finally:
+        await codex.close()  # Closes only our proxy, never the shared daemon.
+
+
 def main():
     parser = argparse.ArgumentParser(description="Private LLM Usage account connector")
-    parser.add_argument("command", choices=["serve", "rpc", "status", "install", "install-hermes"])
+    parser.add_argument("command", choices=["serve", "rpc", "status", "install", "install-hermes", "runtime"])
     parser.add_argument("--state", type=Path, default=default_state())
     parser.add_argument("--codex")
     parser.add_argument("--codex-socket", type=Path, default=Path.home() / ".codex/app-server-control/app-server-control.sock")
@@ -500,7 +568,10 @@ def main():
             peer = Peer(args.state, args.codex or find_codex(), args.codex_socket)
             asyncio.run(peer.serve())
             return
-        if args.command == "install":
+        if args.command == "runtime":
+            request = json.loads(sys.stdin.buffer.readline(MAX_MESSAGE + 1))
+            result = {"ok": True, "result": asyncio.run(runtime_command(args, request))}
+        elif args.command == "install":
             result = {"ok": True, "result": install()}
         elif args.command == "install-hermes":
             enabled = install_hermes()
@@ -512,6 +583,8 @@ def main():
         print(json.dumps(result))
     except KeyboardInterrupt:
         pass
+    except RuntimeSettingsError as error:
+        print(json.dumps({"ok": False, "error": str(error)}))
     except Exception:
         print(json.dumps({"ok": False, "error": "Connector unavailable. Check the installation and Codex connection."}))
         sys.exit(1)

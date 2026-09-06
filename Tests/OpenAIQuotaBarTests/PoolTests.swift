@@ -43,4 +43,72 @@ final class PoolTests: XCTestCase {
         XCTAssertEqual(store.accounts.map(\.id), [b.id])
         XCTAssertEqual(store.pool.accountID, b.id)
     }
+
+    @MainActor func testTargetedSwitchPersistsAndRetriesOnlyEachDevicesOwnAccount() async throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("llm-targets-\(UUID())")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let file = folder.appendingPathComponent("pool.json")
+        let vps = PoolDevice(name: "VPS", sshHost: "fixture-vps")
+        let other = PoolDevice(name: "Other VPS", sshHost: "fixture-other")
+        struct Legacy: Encodable { let accountID: UUID; let selectionID: String; let devices: [PoolDevice] }
+        let a = Account.samples[0], b = Account.samples[1]
+        try JSONEncoder().encode(Legacy(accountID: a.id, selectionID: "old", devices: [vps, other])).write(to: file)
+        let pool = AccountPool(file: file)
+        XCTAssertEqual(pool.selections.count, 3, "Legacy global choice migrates to all existing devices")
+        var sent: [(UUID, String)] = []
+        var offline = true
+        pool.grantProvider = { id, selection in
+            PoolGrant(selectionID: selection, accountID: id.uuidString, name: "Fixture", accessToken: "fake", chatgptAccountId: "fake", planType: "pro")
+        }
+        pool.transport = { device, command, data in
+            XCTAssertEqual(command, "rpc")
+            let request = try JSONSerialization.jsonObject(with: XCTUnwrap(data)) as! [String: Any]
+            let grant = request["grant"] as! [String: Any]
+            sent.append((device.id, grant["accountID"] as! String))
+            if device.id == vps.id && offline { throw CancellationError() }
+            return try JSONSerialization.data(withJSONObject: ["ok": true, "result": [
+                "accountID": grant["accountID"]!, "selectionID": grant["selectionID"]!, "state": "active", "codexConnected": true]])
+        }
+        await pool.use(b, on: [vps.id])
+        XCTAssertEqual(sent.map { $0.0 }, [vps.id], "A VPS-only switch must never contact this Mac or another VPS")
+        XCTAssertEqual(pool.accountID, a.id)
+        XCTAssertEqual(pool.selections[vps.id]?.accountID, b.id)
+        XCTAssertEqual(pool.confirmedCount, 0)
+        XCTAssertTrue(pool.isSelected(a.id)); XCTAssertTrue(pool.isSelected(b.id))
+        let restored = AccountPool(file: file)
+        XCTAssertEqual(restored.selections, pool.selections)
+        sent.removeAll(); offline = false
+        await pool.synchronize()
+        XCTAssertEqual(Dictionary(uniqueKeysWithValues: sent), [PoolDevice.local.id: a.id.uuidString, vps.id: b.id.uuidString, other.id: a.id.uuidString])
+        XCTAssertEqual(pool.confirmedCount, 3)
+        XCTAssertEqual(pool.activeDevices(for: b.id).map(\.id), [vps.id])
+        sent.removeAll()
+        await pool.use(b, on: [PoolDevice.local.id])
+        XCTAssertEqual(sent.map { $0.0 }, [PoolDevice.local.id])
+        XCTAssertEqual(pool.selections[other.id]?.accountID, a.id)
+        sent.removeAll()
+        await pool.use(a, on: [])
+        XCTAssertTrue(sent.isEmpty)
+        await pool.use(b)
+        XCTAssertEqual(Set(sent.map { $0.0 }), Set(pool.devices.map(\.id)))
+        XCTAssertEqual(pool.confirmedCount, 3)
+    }
+
+    @MainActor func testRemoteSelectedAccountCannotBeDisconnectedAndPreviewNeverContactsCodex() async throws {
+        let store = Store(ephemeral: true)
+        let a = Account.samples[0], b = Account.samples[1]
+        try store.saveAccount(a, key: ""); try store.saveAccount(b, key: "")
+        await store.pool.connect(name: "Fixture VPS", host: "fixture")
+        let vps = try XCTUnwrap(store.pool.devices.last)
+        store.pool.transport = { _, _, _ in XCTFail("Preview must never run real commands"); throw CancellationError() }
+        await store.pool.use(a, on: [vps.id])
+        await store.pool.use(b, on: [PoolDevice.local.id])
+        do { try await store.disconnect(a); XCTFail("Remote account must remain connected") } catch { }
+        _ = try await store.pool.runtimeSettings(for: vps)
+        let result = try await store.pool.runtimeSettings(for: vps, version: "preview", changes: ["sandbox": "danger-full-access", "approval": "never"])
+        XCTAssertEqual(result.approval, "never")
+        let local = try await store.pool.runtimeSettings(for: .local)
+        XCTAssertEqual(local.sandbox, "workspace-write")
+    }
 }

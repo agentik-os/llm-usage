@@ -44,7 +44,7 @@ struct AccountsOverview: View {
                     .buttonStyle(PrimaryButtonStyle()).accessibilityIdentifier("sign-in")
             } else {
                 Button { pool.showingDevices = true } label: {
-                    Label(pool.accountID == nil ? "Connect your devices" : "\(pool.confirmedCount) of \(pool.devices.count) devices confirmed", systemImage: "desktopcomputer")
+                    Label(pool.selections.isEmpty ? "Connect your devices" : "\(pool.confirmedCount) of \(pool.devices.count) devices confirmed", systemImage: "desktopcomputer")
                         .font(.system(size: 10)).foregroundStyle(Palette.secondary)
                 }.buttonStyle(.plain).accessibilityIdentifier("home-devices")
             }
@@ -70,9 +70,10 @@ struct AccountUsageRow: View {
         VStack(spacing: 6) {
             HStack(spacing: 8) {
                 Text(account.name).font(.system(size: 13, weight: .semibold)).lineLimit(1)
-                if pool.accountID == account.id {
-                    Image(systemName: "checkmark.circle.fill").font(.system(size: 10)).help("Selected for your devices")
-                        .accessibilityLabel("Selected account")
+                if !pool.activeDevices(for: account.id).isEmpty {
+                    ActiveAccountBadge(names: pool.activeDevices(for: account.id).map(\.name).joined(separator: ", "))
+                } else if pool.isSelected(account.id) {
+                    Label("Pending", systemImage: "clock").font(.system(size: 9)).foregroundStyle(Palette.secondary)
                 }
                 Spacer(minLength: 2)
                 if let fraction {

@@ -205,5 +205,67 @@ class HermesTests(unittest.TestCase):
         self.assertIsNone(self.route(api_mode="codex_app_server"))
 
 
+
+class FakeRuntime:
+    def __init__(self):
+        self.config = {"model": "fixture", "model_reasoning_effort": "medium", "sandbox_mode": "workspace-write", "approval_policy": "on-request"}
+        self.version = "one"
+        self.writes = []
+        self.methods = []
+    async def start(self):
+        pass
+    async def request(self, method, params):
+        self.methods.append(method)
+        if method == "config/read":
+            return {"config": dict(self.config), "layers": [{"name": {"type": "user", "file": "/fixture/config.toml"}, "version": self.version}]}
+        if method == "model/list":
+            return {"data": [{"id": "fixture", "model": "fixture", "displayName": "Fixture", "isDefault": True,
+                "defaultReasoningEffort": "medium", "supportedReasoningEfforts": [{"reasoningEffort": e, "description": e} for e in ["medium", "high"]]}]}
+        if method == "config/batchWrite":
+            self.writes.append(params)
+            for edit in params["edits"]:
+                self.config[edit["keyPath"]] = edit["value"]
+            self.version = "two"
+            return {}
+        raise AssertionError("Unexpected method: " + method)
+
+
+class RuntimeTests(unittest.IsolatedAsyncioTestCase):
+    async def test_settings_change_only_requested_defaults_without_reloading_threads(self):
+        codex = FakeRuntime()
+        await peer.runtime_settings(codex, {"version": "one", "changes": {"effort": "high"}})
+        self.assertEqual(codex.config["model_reasoning_effort"], "high")
+        self.assertEqual(codex.config["sandbox_mode"], "workspace-write")
+        self.assertEqual(codex.writes, [{"expectedVersion": "one", "reloadUserConfig": False,
+            "edits": [{"keyPath": "model_reasoning_effort", "value": "high", "mergeStrategy": "replace"}]}])
+        self.assertEqual(set(codex.methods), {"config/read", "config/batchWrite", "model/list"})
+
+    async def test_full_access_and_yolo_are_explicit_defaults(self):
+        codex = FakeRuntime()
+        result = await peer.runtime_settings(codex, {"version": "one", "changes": {"sandbox": "danger-full-access", "approval": "never"}})
+        self.assertEqual(result["sandbox"], "danger-full-access")
+        self.assertEqual(result["approval"], "never")
+        self.assertFalse(codex.writes[0]["reloadUserConfig"])
+
+    async def test_stale_or_invalid_changes_never_write(self):
+        for request in [{"version": "stale", "changes": {"effort": "high"}},
+                        {"version": "one", "changes": {"effort": "imaginary"}},
+                        {"version": "one", "changes": {"model": "unknown", "effort": "high"}},
+                        {"version": "one", "changes": {"sandbox": "invalid"}},
+                        {"version": "one", "changes": {"approval": "invalid"}},
+                        {"version": "one", "changes": {"api_key": "secret"}}]:
+            codex = FakeRuntime()
+            with self.assertRaises(ValueError):
+                await peer.runtime_settings(codex, request)
+            self.assertFalse(codex.writes)
+
+    async def test_read_does_not_write_or_expose_unrelated_configuration(self):
+        codex = FakeRuntime()
+        codex.config["api_key"] = "secret"
+        result = await peer.runtime_settings(codex, {})
+        self.assertFalse(codex.writes)
+        self.assertNotIn("secret", json.dumps(result))
+
+
 if __name__ == "__main__":
     unittest.main()

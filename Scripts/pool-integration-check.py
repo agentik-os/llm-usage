@@ -36,6 +36,7 @@ async def check():
         env = {k: v for k, v in os.environ.items() if k not in ("OPENAI_API_KEY", "CODEX_API_KEY", "CODEX_ACCESS_TOKEN", "CODEX_HOME", "OPENAI_BASE_URL", "CHATGPT_BASE_URL")}
         env["CODEX_HOME"] = str(folder / "codex-home")
         Path(env["CODEX_HOME"]).mkdir()
+        (Path(env["CODEX_HOME"]) / "config.toml").write_text('sandbox_mode = "workspace-write"\napproval_policy = "on-request"\n')
         env["RUST_LOG"] = "off"
         process = await asyncio.create_subprocess_exec(executable, "-c", 'cli_auth_credentials_store="file"',
             "-c", 'chatgpt_base_url="http://127.0.0.1:9"', "app-server", "--listen", "unix://" + str(sock),
@@ -62,11 +63,24 @@ async def check():
             await connector.select(b)
             second = await observer.request("getAuthStatus", {"includeToken": True, "refreshToken": False})
             assert second.get("authToken") == b["accessToken"]
+            settings = await peer.runtime_settings(observer, {})
+            assert settings["version"] and settings["models"]
+            selected_model = settings["models"][0]
+            changed = await peer.runtime_settings(observer, {"version": settings["version"], "changes": {
+                "model": selected_model["model"], "effort": selected_model["defaultReasoningEffort"],
+                "sandbox": "danger-full-access", "approval": "never"}})
+            assert changed["model"] == selected_model["model"]
+            assert changed["sandbox"] == "danger-full-access" and changed["approval"] == "never"
+            try:
+                await peer.runtime_settings(observer, {"version": settings["version"], "changes": {"approval": "on-request"}})
+                raise AssertionError("Stale settings must be rejected")
+            except ValueError:
+                pass
             preserved = await observer.request("thread/read", {"threadId": thread_id, "includeTurns": False})
             assert preserved["thread"]["id"] == thread_id
             assert process.returncode is None
             print(json.dumps({"nativeAccountSwitch": "passed", "persistentObserver": "passed", "conversationPreserved": True,
-                              "daemonRestarted": False, "realCredentialsUsed": False, "modelRequests": 0}))
+                              "runtimeDefaults": "passed", "staleWriteRejected": True, "daemonRestarted": False, "realCredentialsUsed": False, "modelRequests": 0}))
         finally:
             await observer.close()
             await connector.codex.close()

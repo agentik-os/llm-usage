@@ -55,10 +55,16 @@ struct DeviceConnection {
     var checkedAt: Date?
 }
 
+struct DeviceSelection: Codable, Equatable {
+    var accountID: UUID
+    var selectionID: String
+}
+
 private struct PoolPreferences: Codable {
     var accountID: UUID?
     var selectionID: String?
     var devices: [PoolDevice] = []
+    var selections: [String: DeviceSelection]?
 }
 
 /// Short subprocesses receive secrets only through stdin. Stderr is discarded,
@@ -105,9 +111,12 @@ final class AccountPool: ObservableObject {
     @Published var showingDevices = false
     var grantProvider: ((UUID, String) async throws -> PoolGrant)?
     private var selectionID: String?
+    @Published private(set) var selections: [UUID: DeviceSelection] = [:]
+    var transport: ((PoolDevice, String, Data?) async throws -> Data)?
     private var polling: Task<Void, Never>?
     private let file: URL
-    private let preview: Bool
+    let preview: Bool
+    var previewRuntime: [UUID: RuntimeSnapshot] = [:]
     private var canSave = true
 
     init(preview: Bool = false, file: URL? = nil) {
@@ -119,6 +128,11 @@ final class AccountPool: ObservableObject {
                 let value = try JSONDecoder().decode(PoolPreferences.self, from: Data(contentsOf: self.file))
                 accountID = value.accountID; selectionID = value.selectionID
                 devices = [.local] + value.devices.filter { !$0.isLocal }
+                if let saved = value.selections {
+                    for device in devices { selections[device.id] = saved[device.id.uuidString] }
+                } else if let id = value.accountID, let selection = value.selectionID {
+                    for device in devices { selections[device.id] = DeviceSelection(accountID: id, selectionID: selection) }
+                }
             } catch { canSave = false; self.error = "Device settings need recovery. Your original file has been preserved." }
         }
     }
@@ -136,11 +150,12 @@ final class AccountPool: ObservableObject {
         ["/opt/homebrew/bin/python3", "/usr/local/bin/python3", "/usr/bin/python3"].first(where: FileManager.default.isExecutableFile(atPath:)) ?? "/usr/bin/python3"
     }
 
-    private func save(account: UUID?, selection: String?, devices: [PoolDevice]) throws {
+    private func save(account: UUID?, selection: String?, devices: [PoolDevice], choices: [UUID: DeviceSelection]? = nil) throws {
         guard !preview else { return }
         guard canSave else { throw UsageError.message("Restore device settings before changing them.") }
         try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
-        try JSONEncoder().encode(PoolPreferences(accountID: account, selectionID: selection, devices: devices.filter { !$0.isLocal }))
+        try JSONEncoder().encode(PoolPreferences(accountID: account, selectionID: selection, devices: devices.filter { !$0.isLocal },
+            selections: Dictionary(uniqueKeysWithValues: (choices ?? selections).map { ($0.key.uuidString, $0.value) })))
             .write(to: file, options: .atomic)
     }
 
@@ -155,32 +170,63 @@ final class AccountPool: ObservableObject {
     }
     func stop() { polling?.cancel(); polling = nil }
 
-    func use(_ account: Account) async {
+    func use(_ account: Account, on targetIDs: Set<UUID>? = nil) async {
         guard !isWorking, account.isCodex else { return }
-        if preview {
-            accountID = account.id; selectionID = UUID().uuidString
-            connections[PoolDevice.local.id] = DeviceConnection(status: PeerStatus(accountID: account.id.uuidString, selectionID: selectionID, name: account.name,
-                codexConnected: true, state: "active", hermesInstalled: true), reachable: true, checkedAt: Date())
-            return
-        }
-        guard let grantProvider else { return }
+        let targets = devices.filter { (targetIDs ?? Set(devices.map(\.id))).contains($0.id) }
+        guard !targets.isEmpty else { error = "Choose at least one device."; return }
         isWorking = true; error = nil
         defer { isWorking = false }
         do {
-            guard canSave else { throw UsageError.message("Restore device settings before switching accounts.") }
             let selection = UUID().uuidString
-            let grant = try await grantProvider(account.id, selection)
-            let status = try await send(.local, grant: grant)
-            // Record the selected account only after this Mac confirms it.
-            try save(account: account.id, selection: selection, devices: devices)
-            accountID = account.id; selectionID = selection
-            connections[PoolDevice.local.id] = DeviceConnection(status: status, reachable: true, checkedAt: Date())
-            await syncRemote(grant)
+            let grant: PoolGrant?
+            if preview { grant = nil }
+            else {
+                guard let grantProvider else { throw UsageError.message("Account connection unavailable.") }
+                grant = try await grantProvider(account.id, selection)
+            }
+            var choices = selections
+            for device in targets { choices[device.id] = DeviceSelection(accountID: account.id, selectionID: selection) }
+            let local = choices[PoolDevice.local.id]
+            // Persist intent before delivery: offline targets retry their own choice.
+            try save(account: local?.accountID, selection: local?.selectionID, devices: devices, choices: choices)
+            selections = choices; accountID = local?.accountID; selectionID = local?.selectionID
+            for device in targets {
+                if preview {
+                    connections[device.id] = DeviceConnection(status: PeerStatus(accountID: account.id.uuidString,
+                        selectionID: selection, name: account.name, codexConnected: true, state: "active"), reachable: true, checkedAt: Date())
+                } else { await update(device, grant: grant) }
+            }
+            if targets.contains(where: { !isConfirmed($0) }) { error = "Some devices have not confirmed. Their selection is saved and will retry." }
         } catch { self.error = error.localizedDescription }
     }
 
-    private func command(_ device: PoolDevice, _ command: String, input: Data? = nil, timeout: Double = 30) async throws -> Data {
+    func isSelected(_ id: UUID) -> Bool { selections.values.contains { $0.accountID == id } }
+
+    func isInUse(_ id: UUID) -> Bool {
+        isSelected(id) || connections.values.contains { $0.status?.accountID == id.uuidString }
+    }
+
+    func isConfirmed(_ device: PoolDevice) -> Bool {
+        guard let choice = selections[device.id], let connection = connections[device.id],
+              connection.reachable, let status = connection.status else { return false }
+        return status.accountID == choice.accountID.uuidString && status.selectionID == choice.selectionID
+            && status.state == "active" && status.codexConnected == true
+    }
+
+    func activeDevices(for id: UUID) -> [PoolDevice] {
+        devices.filter { selections[$0.id]?.accountID == id && isConfirmed($0) }
+    }
+
+    func command(_ device: PoolDevice, _ command: String, input: Data? = nil, timeout: Double = 30) async throws -> Data {
+        if let transport { return try await transport(device, command, input) }
         if device.isLocal { return try await PoolProcess.run(python, [resource.path, command], input: input, timeout: timeout) }
+        if command == "runtime" {
+            guard Self.validSSHHost(device.sshHost) else { throw UsageError.message("Invalid SSH host.") }
+            let script = try String(contentsOf: resource, encoding: .utf8)
+            let quoted = "'" + script.replacingOccurrences(of: "'", with: "'\"'\"'") + "'"
+            return try await PoolProcess.run("/usr/bin/ssh", ["-T", "-o", "BatchMode=yes", "-o", "ConnectTimeout=6",
+                "--", device.sshHost, "python3 -c " + quoted + " runtime"], input: input, timeout: timeout)
+        }
         guard Self.validSSHHost(device.sshHost), ["rpc", "status", "install-hermes"].contains(command) else {
             throw UsageError.message("Use an SSH alias or user@hostname.")
         }
@@ -224,25 +270,17 @@ final class AccountPool: ObservableObject {
         }
     }
 
-    private func syncRemote(_ grant: PoolGrant?) async {
-        // Each device is independent, but each selection waits for every attempt
-        // so an older refresh cannot overtake a new manual choice.
-        await withTaskGroup(of: Void.self) { group in
-            for device in devices where !device.isLocal { group.addTask { await self.update(device, grant: grant) } }
-        }
-    }
-
     func synchronize() async {
         guard !isWorking, !preview else { return }
-        isWorking = true
+        isWorking = true; error = nil
         defer { isWorking = false }
-        var grant: PoolGrant?
-        if let accountID, let selectionID, let grantProvider {
-            do { grant = try await grantProvider(accountID, selectionID); error = nil }
-            catch { self.error = "The selected account needs attention. Open its settings to sign in again." }
+        for device in devices {
+            do { await update(device, grant: try await currentGrant(for: device)) }
+            catch {
+                connections[device.id, default: DeviceConnection()].reachable = false
+                self.error = "An account needs attention. Sign in again to renew its devices."
+            }
         }
-        await update(.local, grant: grant)
-        await syncRemote(grant)
     }
 
     func connect(name: String, host: String) async {
@@ -267,14 +305,14 @@ final class AccountPool: ObservableObject {
             try save(account: accountID, selection: selectionID, devices: devices + [device])
             devices.append(device)
             try? await Task.sleep(nanoseconds: 500_000_000)
-            let grant = try await currentGrant()
+            let grant = try await currentGrant(for: device)
             await update(device, grant: grant)
         } catch { self.error = "Couldn’t connect this VPS. Verify SSH access, Python 3.9+, Codex, and a user systemd session." }
     }
 
-    private func currentGrant() async throws -> PoolGrant? {
-        guard let accountID, let selectionID, let grantProvider else { return nil }
-        return try await grantProvider(accountID, selectionID)
+    private func currentGrant(for device: PoolDevice) async throws -> PoolGrant? {
+        guard let choice = selections[device.id], let grantProvider else { return nil }
+        return try await grantProvider(choice.accountID, choice.selectionID)
     }
 
     func installLocal() async {
@@ -306,20 +344,15 @@ final class AccountPool: ObservableObject {
     func label(for device: PoolDevice) -> String {
         guard let connection = connections[device.id] else { return "Not connected" }
         if connection.checking { return "Connecting…" }
-        guard connection.reachable else { return accountID == nil ? "Not connected" : "Offline · switch pending" }
+        guard connection.reachable else { return selections[device.id] == nil ? "Not connected" : "Offline · switch pending" }
         guard let status = connection.status else { return "Ready" }
         if status.state == "expired" { return "Account expired · open LLM Usage" }
         if status.state == "attention" { return "Needs attention" }
-        if let accountID, status.accountID == accountID.uuidString, status.selectionID == selectionID, status.codexConnected == true {
+        if isConfirmed(device) {
             return "Using \(status.name ?? "selected account")"
         }
-        return accountID == nil ? "Ready to switch" : "Waiting to switch"
+        return selections[device.id] == nil ? "Ready to switch" : "Waiting to switch"
     }
 
-    var confirmedCount: Int {
-        devices.filter { device in
-            guard let value = connections[device.id], value.reachable, let status = value.status else { return false }
-            return accountID != nil && status.accountID == accountID?.uuidString && status.selectionID == selectionID && status.state == "active"
-        }.count
-    }
+    var confirmedCount: Int { devices.filter { isConfirmed($0) }.count }
 }

@@ -366,7 +366,7 @@ final class Store: ObservableObject {
     }
 
     func disconnect(_ account: Account) async throws {
-        guard pool.accountID != account.id else { throw UsageError.message("Switch to another account before disconnecting the account your devices are using.") }
+        guard !pool.isInUse(account.id) else { throw UsageError.message("Switch to another account before disconnecting the account your devices are using.") }
         disconnecting.insert(account.id)
         defer { disconnecting.remove(account.id) }
         activeClients[account.id]?.stop()

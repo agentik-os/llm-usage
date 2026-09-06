@@ -1,26 +1,55 @@
 import SwiftUI
 
+struct ActiveAccountBadge: View {
+    let names: String
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var appeared = false
+    var body: some View {
+        Label("Active", systemImage: "checkmark.circle.fill")
+            .font(.system(size: 10, weight: .semibold))
+            .scaleEffect(appeared ? 1 : 0.8).opacity(appeared ? 1 : 0)
+            .onAppear { withAnimation(reduceMotion ? nil : .spring(response: 0.4, dampingFraction: 0.6)) { appeared = true } }
+            .help("Active on: \(names)").accessibilityLabel("Active on \(names)")
+    }
+}
+
 struct AccountSwitchButton: View {
     let account: Account
     @EnvironmentObject private var pool: AccountPool
+    @State private var targets: Set<UUID> = [PoolDevice.local.id]
 
     var body: some View {
         VStack(spacing: 8) {
-            Button { Task { await pool.use(account) } } label: {
+            let active = pool.activeDevices(for: account.id)
+            if !active.isEmpty { ActiveAccountBadge(names: active.map(\.name).joined(separator: ", ")) }
+            Menu {
+                Button("This Mac") { targets = [PoolDevice.local.id] }
+                Button("All devices") { targets = Set(pool.devices.map(\.id)) }
+                ForEach(pool.devices.filter { !$0.isLocal }) { device in
+                    Button("Only \(device.name)") { targets = [device.id] }
+                }
+                Divider()
+                ForEach(pool.devices) { device in
+                    Toggle(device.name, isOn: Binding(get: { targets.contains(device.id) }, set: { selected in
+                        if selected { targets.insert(device.id) } else { targets.remove(device.id) }
+                    }))
+                }
+            } label: {
+                Label(targets.count == pool.devices.count ? "All devices" : pool.devices.filter { targets.contains($0.id) }.map(\.name).joined(separator: ", ").nonEmptyTarget,
+                      systemImage: "desktopcomputer")
+                    .font(.system(size: 11)).lineLimit(2)
+            }.disabled(pool.isWorking).accessibilityIdentifier("switch-targets")
+            Button { Task { await pool.use(account, on: targets) } } label: {
                 HStack(spacing: 8) {
                     if pool.isWorking { ProgressView().controlSize(.small) }
-                    else { Image(systemName: pool.accountID == account.id ? "checkmark.circle" : "arrow.triangle.swap") }
-                    Text(pool.isWorking ? "Connecting…" : pool.accountID == account.id ? "Selected account" : "Use this account")
+                    else { Image(systemName: "arrow.triangle.swap") }
+                    Text(pool.isWorking ? "Connecting…" : "Use this account")
                 }
-            }.buttonStyle(PrimaryButtonStyle()).disabled(pool.isWorking)
+            }.buttonStyle(PrimaryButtonStyle()).disabled(pool.isWorking || targets.isEmpty)
                 .accessibilityIdentifier("use-account").accessibilityLabel("Use this account")
-                .accessibilityValue(pool.accountID == account.id ? "Selected account" : "Not selected")
             Button { pool.showingDevices = true } label: {
-                HStack(spacing: 5) {
-                    Image(systemName: "desktopcomputer")
-                    Text(pool.accountID == account.id ? "\(pool.confirmedCount) of \(pool.devices.count) devices confirmed" : "Codex terminals · Connected devices")
-                    Image(systemName: "chevron.right").font(.system(size: 7, weight: .semibold))
-                }.font(.system(size: 10)).foregroundStyle(Palette.secondary)
+                Label("\(active.count) devices active · Details", systemImage: "desktopcomputer")
+                    .font(.system(size: 10)).foregroundStyle(Palette.secondary)
             }.buttonStyle(.plain).accessibilityIdentifier("account-devices")
             if let error = pool.error {
                 Text(error).font(.system(size: 10)).foregroundStyle(Palette.secondary)
@@ -28,6 +57,10 @@ struct AccountSwitchButton: View {
             }
         }.padding(.top, 4)
     }
+}
+
+private extension String {
+    var nonEmptyTarget: String { isEmpty ? "Choose devices" : self }
 }
 
 struct DevicesView: View {
@@ -46,7 +79,7 @@ struct DevicesView: View {
                 Button { Task { await pool.synchronize() } } label: { Image(systemName: "arrow.clockwise") }
                     .buttonStyle(QuietButtonStyle()).disabled(pool.isWorking).accessibilityLabel("Refresh devices")
             }.padding(.bottom, 20)
-            Text("One account. Across your devices.")
+            Text("Your devices. Your choice.")
                 .font(.system(size: 13, weight: .medium)).padding(.bottom, 6)
             Text("Switch the shared Codex connection. Running work stays open; requests already in progress finish on their original account.")
                 .font(.system(size: 11)).foregroundStyle(Palette.secondary).fixedSize(horizontal: false, vertical: true)

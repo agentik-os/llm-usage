@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Capture isolated, non-persistent native previews. Never reads keys/accounts."""
-import pathlib, subprocess, tempfile, time, sys
+import pathlib, subprocess, tempfile, time, sys, os
 root = pathlib.Path(__file__).resolve().parents[1]
-binary = root / '.build/debug/OpenAIQuotaBar'
+binary = pathlib.Path(os.environ.get('LLM_USAGE_TEST_BINARY', str(root / '.build/debug/OpenAIQuotaBar')))
 out = root / 'Artifacts'
 out.mkdir(exist_ok=True)
 names = [arg for arg in sys.argv[1:] if not arg.startswith('--')]
