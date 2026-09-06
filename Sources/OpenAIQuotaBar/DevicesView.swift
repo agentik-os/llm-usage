@@ -65,8 +65,6 @@ private extension String {
 
 struct DevicesView: View {
     @EnvironmentObject private var pool: AccountPool
-    @State private var name = ""
-    @State private var host = ""
     @State private var adding = false
 
     var body: some View {
@@ -88,26 +86,7 @@ struct DevicesView: View {
                 VStack(alignment: .leading, spacing: 12) {
                     ForEach(pool.devices) { device in deviceCard(device) }
                     if adding {
-                        VStack(alignment: .leading, spacing: 12) {
-                            Text("Connect a VPS").font(.system(size: 13, weight: .semibold))
-                            TextField("Name, e.g. My VPS", text: $name).textFieldStyle(.plain)
-                                .padding(10).softSurface(radius: 10).accessibilityIdentifier("device-name")
-                            TextField("SSH alias or user@hostname", text: $host).textFieldStyle(.plain)
-                                .padding(10).softSurface(radius: 10).accessibilityIdentifier("device-host")
-                            Text("Uses your existing SSH access. Installs a private connector for that Linux user. Python 3.9+, Codex and systemd are required.")
-                                .font(.system(size: 10)).foregroundStyle(Palette.secondary)
-                            HStack {
-                                Button("Cancel") { adding = false }.buttonStyle(.plain)
-                                Spacer()
-                                Button("Connect") {
-                                    Task {
-                                        await pool.connect(name: name, host: host)
-                                        if pool.error == nil { adding = false; name = ""; host = "" }
-                                    }
-                                }.buttonStyle(.plain).fontWeight(.semibold)
-                                    .disabled(pool.isWorking || host.isEmpty).accessibilityIdentifier("connect-device")
-                            }
-                        }.padding(15).softSurface(radius: 18)
+                        ConnectDeviceView { adding = false }
                     } else {
                         Button { adding = true } label: {
                             Label("Connect a VPS", systemImage: "plus").frame(maxWidth: .infinity).padding(.vertical, 13)
