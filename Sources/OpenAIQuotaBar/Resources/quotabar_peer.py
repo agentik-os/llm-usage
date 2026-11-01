@@ -12,17 +12,48 @@ import contextlib
 import hashlib
 import json
 import os
+import re
 from pathlib import Path
 import shutil
 import signal
+import sqlite3
 import struct
 import subprocess
 import sys
 import tempfile
 import time
 
-VERSION = "4.1.0"
+VERSION = "4.3.0"
+FIXED_CODEX_PRERELEASE = "0.155.0-alpha.3.10"
 MAX_MESSAGE = 131072
+
+
+def supports_live_switch(version):
+    # Verified with real model WebSocket requests. Stable 0.154.0 predates
+    # openai/codex#44489; do not infer compatibility from the CLI on disk.
+    if version == FIXED_CODEX_PRERELEASE:
+        return True
+    match = re.fullmatch(r"(\d+)\.(\d+)\.(\d+)", version or "")
+    return bool(match and tuple(map(int, match.groups())) >= (0, 155, 0))
+
+
+async def compatibility_command(executable):
+    process = await asyncio.create_subprocess_exec(executable, "app-server", "daemon", "version",
+        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL)
+    try:
+        raw, _ = await asyncio.wait_for(process.communicate(), 8)
+        if process.returncode != 0 or len(raw) > MAX_MESSAGE:
+            raise ValueError("Version unavailable")
+        value = json.loads(raw)
+        running = value.get("appServerVersion")
+        installed = value.get("cliVersion")
+        return {"runningVersion": running, "installedVersion": installed,
+                "liveSwitchSupported": supports_live_switch(running),
+                "restartRequired": supports_live_switch(installed) and not supports_live_switch(running)}
+    finally:
+        if process.returncode is None:
+            process.terminate()
+            await process.wait()
 
 
 def default_state():
@@ -127,7 +158,7 @@ class CodexConnection:
         if b" 101 " not in lines[0] or headers.get(b"sec-websocket-accept") != expected:
             raise RuntimeError("Codex does not support this control connection.")
         self.reader_task = asyncio.create_task(self.read())
-        await self.request("initialize", {
+        self.server_info = await self.request("initialize", {
             "clientInfo": {"name": "quotabar_peer", "title": "LLM Usage", "version": VERSION},
             "capabilities": {"experimentalApi": True},
         })
@@ -491,6 +522,60 @@ class RuntimeSettingsError(ValueError):
     pass
 
 
+async def open_conversations(codex):
+    """Only loaded primary OpenAI conversations; never load saved history."""
+    threads, cursor, seen = [], None, set()
+    while True:
+        page = await codex.request("thread/loaded/list", {"limit": 100, "cursor": cursor})
+        for thread_id in page.get("data", []):
+            thread = (await codex.request("thread/read", {
+                "threadId": thread_id, "includeTurns": False}))["thread"]
+            if (thread.get("modelProvider") == "openai"
+                    and not thread.get("parentThreadId")
+                    and not isinstance(thread.get("source"), dict)
+                    and thread.get("status", {}).get("type") in ("idle", "active")):
+                threads.append(thread)
+        cursor = page.get("nextCursor")
+        if not cursor:
+            return threads
+        if cursor in seen or len(seen) >= 100:
+            raise RuntimeSettingsError("Could not enumerate open conversations.")
+        seen.add(cursor)
+
+
+def standalone_agk_count():
+    """Read local registry metadata only; never send input to a user's terminal."""
+    path = Path.home() / ".agentik/runtime.db"
+    if not path.is_file():
+        return 0
+    try:
+        with contextlib.closing(sqlite3.connect(path.as_uri() + "?mode=ro", uri=True, timeout=1)) as db:
+            rows = db.execute("SELECT command_json FROM runtime_sessions WHERE type='codex' "
+                "AND archived_at IS NULL AND status IN ('running','working','idle','waiting','attention')")
+            return sum(1 for (raw,) in rows if "--remote" not in json.loads(raw or "[]"))
+    except (sqlite3.Error, ValueError, TypeError):
+        return None
+
+
+async def update_open_conversations(codex, threads, selection):
+    result = {"updated": 0, "unchanged": 0, "failed": 0, "total": len(threads)}
+    for thread in threads:
+        expected = {"model": selection["model"], "reasoningEffort": selection["effort"]}
+        if all(thread.get(key) == value for key, value in expected.items()):
+            result["unchanged"] += 1
+            continue
+        try:
+            await codex.request("thread/settings/update", {"threadId": thread["id"], **selection})
+            actual = (await codex.request("thread/read", {
+                "threadId": thread["id"], "includeTurns": False}))["thread"]
+            if not all(actual.get(key) == value for key, value in expected.items()):
+                raise RuntimeSettingsError("The conversation did not confirm its new model.")
+            result["updated"] += 1
+        except (RuntimeError, ValueError, KeyError, asyncio.TimeoutError):
+            result["failed"] += 1
+    return result
+
+
 async def runtime_snapshot(codex):
     response = await codex.request("config/read", {"includeLayers": True})
     config = response.get("config", {})
@@ -515,7 +600,8 @@ async def runtime_snapshot(codex):
 
 
 async def runtime_settings(codex, request):
-    # Dedicated control connection. Never reload or mutate any loaded thread.
+    # Model updates use the native next-turn settings API, without restart,
+    # interrupt, resume, user input, or changes to a thread's access policy.
     await codex.start()
     snapshot = await runtime_snapshot(codex)
     changes = request.get("changes")
@@ -538,12 +624,23 @@ async def runtime_settings(codex, request):
         raise RuntimeSettingsError("Unsupported access mode.")
     if "approval" in changes and changes["approval"] not in ("untrusted", "on-request", "never"):
         raise RuntimeSettingsError("Unsupported approval mode.")
+    update_open = request.get("updateOpenSessions", False)
+    if not isinstance(update_open, bool):
+        raise RuntimeSettingsError("Invalid open-conversation selection.")
+    threads = await open_conversations(codex) if update_open else []
+    selection = {"model": model_id, "effort": changes.get("effort", snapshot["effort"])}
+    if update_open and (model is None or selection["effort"] not in [
+            e["reasoningEffort"] for e in model["supportedReasoningEfforts"]]):
+        raise RuntimeSettingsError("Choose a model and reasoning effort before updating open conversations.")
     keys = {"model": "model", "effort": "model_reasoning_effort", "sandbox": "sandbox_mode", "approval": "approval_policy"}
     await codex.request("config/batchWrite", {"expectedVersion": snapshot["version"], "reloadUserConfig": False,
         "edits": [{"keyPath": keys[key], "value": value, "mergeStrategy": "replace"} for key, value in changes.items()]})
     result = await runtime_snapshot(codex)
     if any(result.get(key) != value for key, value in changes.items()):
         raise RuntimeSettingsError("Saved, but a managed setting or profile overrides this choice.")
+    if update_open:
+        result["sessionUpdates"] = await update_open_conversations(codex, threads, selection)
+        result["standaloneAgkSessions"] = standalone_agk_count()
     return result
 
 
@@ -555,9 +652,145 @@ async def runtime_command(args, request):
         await codex.close()  # Closes only our proxy, never the shared daemon.
 
 
+def terminal_coverage(socket_path):
+    """Inspect this user's terminal connections, without terminal input or environment reads.
+
+    macOS exposes Unix peer addresses in lsof. On other systems coverage stays
+    explicitly unknown; an AGK registry alone cannot prove terminal coverage.
+    """
+    registered = standalone_agk_count()
+    result = {"sharedTerminals": None, "otherTerminals": None, "coverageKnown": False,
+              "standaloneAgkSessions": registered}
+    if sys.platform != "darwin":
+        return result
+    try:
+        raw = subprocess.run(["/bin/ps", "-axo", "uid=,pid=,tty=,comm="], check=True,
+                             capture_output=True, text=True, timeout=3).stdout
+        processes, terminals = [], set()
+        for line in raw.splitlines():
+            fields = line.split(None, 3)
+            if len(fields) == 4 and fields[0] == str(os.getuid()) and Path(fields[3]).name == "codex":
+                processes.append(fields[1])
+                if fields[2] not in ("??", "?", "-"):
+                    terminals.add(int(fields[1]))
+        if not processes:
+            return dict(result, sharedTerminals=0, otherTerminals=0, coverageKnown=True)
+        output = subprocess.run(["/usr/sbin/lsof", "-nP", "-a", "-p", ",".join(processes), "-U"],
+                                check=True, capture_output=True, text=True, timeout=4).stdout
+        addresses, peers = set(), {}
+        for line in output.splitlines()[1:]:
+            fields = line.split()
+            if len(fields) < 8 or not fields[1].isdigit():
+                continue
+            if fields[-1] == str(socket_path):
+                addresses.add(fields[5])
+            if fields[-1].startswith("->"):
+                peers.setdefault(int(fields[1]), set()).add(fields[-1][2:])
+        if not addresses:
+            return result
+        shared = sum(bool(peers.get(pid, set()) & addresses) for pid in terminals)
+        return dict(result, sharedTerminals=shared, otherTerminals=len(terminals) - shared, coverageKnown=True)
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return result
+
+
+async def switch_verification(codex, grant, executable, socket_path):
+    """Fresh read-back from the actual server, independent of a cached peer status."""
+    await codex.start()
+    # Modern servers prefix this with the initializing client's name; the
+    # version after the first slash still belongs to the running server.
+    match = re.match(r"[^/\r\n]+/([^\s]+)", codex.server_info.get("userAgent", ""))
+    running = match.group(1) if match else None
+    try:
+        installed = (await compatibility_command(executable)).get("installedVersion")
+    except (OSError, ValueError, asyncio.TimeoutError):
+        installed = None
+    confirmed = bool(grant and await codex.matches(grant))
+    conversations, active, cursor, seen = 0, 0, None, set()
+    try:
+        while True:
+            page = await codex.request("thread/loaded/list", {"limit": 100, "cursor": cursor})
+            for tid in page.get("data", []):
+                thread = (await codex.request("thread/read", {"threadId": tid, "includeTurns": False}))["thread"]
+                active += thread.get("status", {}).get("type") == "active"
+                conversations += not isinstance(thread.get("source"), dict)
+            cursor = page.get("nextCursor")
+            if not cursor:
+                break
+            if cursor in seen or len(seen) >= 100:
+                raise ValueError("Incomplete conversation inventory")
+            seen.add(cursor)
+    except (RuntimeError, ValueError, KeyError, asyncio.TimeoutError):
+        conversations, active = None, None
+    supported = supports_live_switch(running)
+    backend_verified = False
+    if confirmed and supported:
+        try:
+            await codex.request("account/rateLimits/read", {})
+            # A concurrent account change must invalidate this verification.
+            backend_verified = await codex.matches(grant)
+        except (RuntimeError, ValueError, asyncio.TimeoutError):
+            pass
+    coverage = await asyncio.to_thread(terminal_coverage, socket_path)
+    return {"accountID": grant.get("accountID") if grant else None,
+            "selectionID": grant.get("selectionID") if grant else None,
+            "credentialConfirmed": confirmed, "backendVerified": backend_verified,
+            "runningVersion": running, "installedVersion": installed,
+            "liveSwitchSupported": supported,
+            "restartRequired": supports_live_switch(installed) and not supported,
+            "openConversations": conversations, "activeRequests": active,
+            "checkedAt": time.time(), **coverage}
+
+
+async def verification_command(args, request, reconnect=False):
+    executable = args.codex or find_codex()
+    def selected_grant():
+        try:
+            value = validate_grant(json.loads((args.state / "active.json").read_text()))
+        except (OSError, ValueError):
+            raise RuntimeSettingsError("The selected account needs to reconnect. Retry the switch.") from None
+        if any(request.get(key) != value.get(key) for key in ("accountID", "selectionID")):
+            raise RuntimeSettingsError("The selection changed. Refresh devices before retrying.")
+        return value
+    grant = selected_grant()
+    codex = CodexConnection(executable, args.codex_socket, lambda: None)
+    try:
+        result = await switch_verification(codex, grant, executable, args.codex_socket)
+        if selected_grant()["accessToken"] != grant["accessToken"]:
+            raise RuntimeSettingsError("The account renewed during verification. Retry this device.")
+        if not reconnect or result["liveSwitchSupported"]:
+            return result
+        if not result["restartRequired"]:
+            raise RuntimeSettingsError("Update Codex on this device, then reconnect it.")
+        if result["activeRequests"] is None or result["activeRequests"] > 0:
+            raise RuntimeSettingsError("Codex is still working. Finish its active tasks, then retry reconnecting.")
+        selected_grant()
+        # Use only Codex's managed lifecycle. Never force-kill an unmanaged server,
+        # send input to terminals, or rewrite their private saved authentication.
+        await codex.close()
+        process = await asyncio.create_subprocess_exec(executable, "app-server", "daemon", "restart",
+            stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL)
+        try:
+            await asyncio.wait_for(process.wait(), 20)
+        except asyncio.TimeoutError:
+            process.terminate()
+            await process.wait()
+            raise RuntimeSettingsError("Codex did not finish reconnecting. Check its terminals before retrying.") from None
+        if process.returncode:
+            raise RuntimeSettingsError("Codex cannot restart this server automatically. After saving work, close its terminals and reopen with codex --remote unix:// resume.")
+        # Reapply through the persistent connector, which owns token renewal.
+        grant = selected_grant()
+        reply = await rpc(args.state, {"command": "select", "grant": grant})
+        if not reply.get("ok"):
+            raise RuntimeSettingsError("Codex restarted but the account is not confirmed. Retry the switch.")
+        return await switch_verification(codex, grant, executable, args.codex_socket)
+    finally:
+        await codex.close()
+
+
 def main():
     parser = argparse.ArgumentParser(description="Private LLM Usage account connector")
-    parser.add_argument("command", choices=["serve", "rpc", "status", "install", "install-hermes", "runtime"])
+    parser.add_argument("command", choices=["serve", "rpc", "status", "install", "install-hermes", "runtime", "compatibility", "verify-switch", "reconnect"])
     parser.add_argument("--state", type=Path, default=default_state())
     parser.add_argument("--codex")
     parser.add_argument("--codex-socket", type=Path, default=Path.home() / ".codex/app-server-control/app-server-control.sock")
@@ -568,7 +801,12 @@ def main():
             peer = Peer(args.state, args.codex or find_codex(), args.codex_socket)
             asyncio.run(peer.serve())
             return
-        if args.command == "runtime":
+        if args.command in ("verify-switch", "reconnect"):
+            request = json.loads(sys.stdin.buffer.readline(MAX_MESSAGE + 1))
+            result = {"ok": True, "result": asyncio.run(verification_command(args, request, args.command == "reconnect"))}
+        elif args.command == "compatibility":
+            result = {"ok": True, "result": asyncio.run(compatibility_command(args.codex or find_codex()))}
+        elif args.command == "runtime":
             request = json.loads(sys.stdin.buffer.readline(MAX_MESSAGE + 1))
             result = {"ok": True, "result": asyncio.run(runtime_command(args, request))}
         elif args.command == "install":

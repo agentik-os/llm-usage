@@ -44,7 +44,7 @@ struct AccountsOverview: View {
                     .buttonStyle(PrimaryButtonStyle()).accessibilityIdentifier("sign-in")
             } else {
                 Button { pool.showingDevices = true } label: {
-                    Label(pool.selections.isEmpty ? "Connect your devices" : "\(pool.confirmedCount) of \(pool.devices.count) devices confirmed", systemImage: "desktopcomputer")
+                    Label(pool.selections.isEmpty ? "Connect your devices" : "\(pool.confirmedCount) of \(pool.selectedCount) selected devices ready", systemImage: "desktopcomputer")
                         .font(.system(size: 10)).foregroundStyle(Palette.secondary)
                 }.buttonStyle(.plain).accessibilityIdentifier("home-devices")
             }
@@ -71,7 +71,7 @@ struct AccountUsageRow: View {
             HStack(spacing: 8) {
                 Text(account.name).font(.system(size: 13, weight: .semibold)).lineLimit(1)
                 if !pool.activeDevices(for: account.id).isEmpty {
-                    ActiveAccountBadge(names: pool.activeDevices(for: account.id).map(\.name).joined(separator: ", "))
+                    ActiveAccountBadge(names: pool.activeDevices(for: account.id).map(\.name).joined(separator: ", "), compact: true)
                 } else if pool.isSelected(account.id) {
                     Label("Pending", systemImage: "clock").font(.system(size: 9)).foregroundStyle(Palette.secondary)
                 }

@@ -25,6 +25,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var clickMonitor: Any?
     private var localMonitor: Any?
     private var refreshTimer: Timer?
+    private var hermesSyncTimer: Timer?
     private let arguments = ProcessInfo.processInfo.arguments
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -62,7 +63,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         // An activating panel gives editable account names normal keyboard focus,
         // including on macOS 27 where nonactivating panels can retain stale focus.
-        panel = GlassPanel(contentRect: NSRect(x: 0, y: 0, width: 396, height: 660), styleMask: [.borderless], backing: .buffered, defer: false)
+        let panelSize = preview && arguments.contains("--compact") ? NSSize(width: 344, height: 660) : NSSize(width: 396, height: 660)
+        panel = GlassPanel(contentRect: NSRect(origin: .zero, size: panelSize), styleMask: [.borderless], backing: .buffered, defer: false)
         panel.title = preview ? "LLM Usage · Design Preview" : "LLM Usage"
         panel.isOpaque = false
         panel.backgroundColor = .clear
@@ -71,8 +73,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         panel.level = .popUpMenu
         panel.hidesOnDeactivate = false
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
-        let hosting = NSHostingView(rootView: ContentView(close: { [weak self] in self?.hidePanel() }).environmentObject(store).environmentObject(store.pool))
-        hosting.frame = NSRect(x: 0, y: 0, width: 396, height: 660)
+        let hosting = NSHostingView(rootView: ContentView(close: { [weak self] in self?.hidePanel() }, panelSize: panelSize).environmentObject(store).environmentObject(store.pool))
+        hosting.frame = NSRect(origin: .zero, size: panelSize)
         hosting.autoresizingMask = [.width, .height]
         // Clip the entire native effect, including its rim and backing layers.
         // Clipping only SwiftUI leaves square glass-layer edges in dark mode.
@@ -112,6 +114,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         if !preview {
             store.pool.start()
+            Task { await store.synchronizeHermes() }
+            hermesSyncTimer = Timer.scheduledTimer(withTimeInterval: 60, repeats: true) { [weak self] _ in
+                Task { @MainActor in await self?.store.synchronizeHermes() }
+            }
             statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
             if let button = statusItem?.button {
                 let image = NSImage(systemSymbolName: "gauge.with.dots.needle.67percent", accessibilityDescription: "LLM Usage — Accounts and usage")

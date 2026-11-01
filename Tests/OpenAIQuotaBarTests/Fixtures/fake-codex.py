@@ -1,4 +1,4 @@
-import json, sys, time
+import base64, json, sys, time
 from pathlib import Path
 
 completed_login = False
@@ -26,6 +26,16 @@ for line in sys.stdin:
         emit({'id': message['id'], 'error': {'code': -1, 'message': 'authentication failed secret-value-must-not-appear'}})
         continue
     if method == 'initialize': result = {'userAgent': 'fake'}
+    elif method == 'getAuthStatus':
+        refresh = bool(message.get('params', {}).get('refreshToken'))
+        log = Path('grant-refresh-requests.json')
+        requests = json.loads(log.read_text()) if log.exists() else []
+        log.write_text(json.dumps(requests + [refresh]))
+        lifetime = 120 if '--grant-expiring' in sys.argv and not refresh else 3600
+        identity = 'wrong-workspace' if '--grant-wrong-account' in sys.argv else 'fixture-workspace'
+        claims = {'exp': time.time() + lifetime, 'https://api.openai.com/auth': {'chatgpt_account_id': identity}}
+        payload = base64.urlsafe_b64encode(json.dumps(claims).encode()).decode().rstrip('=')
+        result = {'authToken': 'test.' + payload + '.test'}
     elif method == 'account/read':
         account = {'type': 'chatgpt', 'email': 'test@example.com', 'planType': 'pro'}
         if '--account-unavailable' in sys.argv or ('--stale-after-login' in sys.argv and completed_login):

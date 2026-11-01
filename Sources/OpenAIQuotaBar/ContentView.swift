@@ -7,6 +7,7 @@ struct ContentView: View {
     @Environment(\.colorScheme) private var scheme
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     var close: () -> Void = {}
+    var panelSize = NSSize(width: 396, height: 660)
 
     var body: some View {
         VStack(spacing: 0) {
@@ -24,13 +25,19 @@ struct ContentView: View {
                 if let error = store.storageError {
                     Text(error).font(.caption).foregroundStyle(Palette.foreground).padding(.horizontal, 24).padding(.bottom, 10)
                 }
-                if store.showingAccountDetails, let account = store.selectedAccount { dashboard(account) }
+                if store.showingAccountDetails, let account = store.selectedAccount {
+                    GeometryReader { geometry in
+                        ScrollView {
+                            dashboard(account).frame(minHeight: geometry.size.height)
+                        }.scrollIndicators(.hidden).accessibilityIdentifier("account-content")
+                    }
+                }
                 else if !store.visibleAccounts.isEmpty { AccountsOverview() }
                 else { welcome }
                 footer
             }
         }
-        .frame(width: 396, height: 660)
+        .frame(width: panelSize.width, height: panelSize.height)
         .font(.system(size: 12))
         .tint(Palette.foreground)
         .background {

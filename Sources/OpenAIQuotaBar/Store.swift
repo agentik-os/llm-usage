@@ -55,6 +55,7 @@ final class Store: ObservableObject {
     @Published var editingAccount: Account?
     @Published private(set) var refreshing: Set<UUID> = []
     @Published var storageError: String?
+    private var hermesSyncing = false
     @Published var signInState: SignInState?
     @Published var browserOpened = false
     @Published private(set) var canResumeSignIn = false
@@ -148,9 +149,38 @@ final class Store: ObservableObject {
         defer { client.stop() }
         try await client.start()
         struct Auth: Decodable { let authToken: String? }
-        let reply = try JSONDecoder().decode(Auth.self, from: await client.request("getAuthStatus", params: ["includeToken": true, "refreshToken": false]))
+        var reply = try JSONDecoder().decode(Auth.self, from: await client.request("getAuthStatus", params: ["includeToken": true, "refreshToken": false]))
+        if let token = reply.authToken, PoolGrant.needsRefresh(token) {
+            // The existing native sign-in owns refresh credentials. Ask Codex
+            // to renew them there instead of copying refresh tokens to Hermes.
+            reply = try JSONDecoder().decode(Auth.self, from: await client.request("getAuthStatus", params: ["includeToken": true, "refreshToken": true]))
+        }
         guard let token = reply.authToken else { throw UsageError.message("Sign in again to use this account.") }
         return try PoolGrant.make(account: account, selectionID: selectionID, token: token)
+    }
+
+    func synchronizeHermes() async {
+        guard !ephemeral, !showingDemo, !hermesSyncing, !isSigningIn,
+              refreshing.isEmpty, let configuration = HermesPoolSync.configuration else { return }
+        let source = accounts.filter { $0.isCodex }
+        guard !source.isEmpty else { return }
+        hermesSyncing = true
+        defer { hermesSyncing = false }
+        do {
+            var grants: [PoolGrant] = []
+            for account in source {
+                grants.append(try await routingGrant(account.id, selectionID: "hermes-local"))
+            }
+            let current = accounts.filter { $0.isCodex }
+            guard current.count == source.count, zip(current, source).allSatisfy({
+                $0.id == $1.id && $0.authSessionID == $1.authSessionID && $0.name == $1.name
+            }) else {
+                return
+            }
+            _ = try await HermesPoolSync.apply(grants, configuration: configuration)
+        } catch {
+            HermesPoolSync.reportFailure()
+        }
     }
 
     struct PendingSignIn: Codable {
@@ -469,6 +499,7 @@ final class Store: ObservableObject {
     func refreshAll() async {
         guard !showingDemo, !ephemeral else { return }
         for account in accounts { await refresh(account) }
+        await synchronizeHermes()
     }
 }
 
