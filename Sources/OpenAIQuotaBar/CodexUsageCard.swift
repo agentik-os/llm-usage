@@ -1,24 +1,28 @@
 import SwiftUI
 
 struct CodexUsageCard: View {
+    @EnvironmentObject private var store: Store
     let account: Account
-    private var limits: CodexUsage.Limits? { account.codexUsage?.codex }
+    @State private var confirmingReset = false
+    @State private var resetting = false
+    @State private var resetMessage: String?
+    private var resetCredits: Int { account.codexUsage?.rateLimitResetCredits?.availableCount ?? 0 }
     var body: some View {
         VStack(spacing: 12) {
             VStack(spacing: 6) {
                 HStack {
-                    Eyebrow(text: "Codex usage")
+                    Eyebrow(text: account.isClaude ? "Claude usage" : "Codex usage")
                     Spacer()
-                    Text(limits?.primary?.title ?? "Current window").font(.system(size: 10, weight: .medium)).foregroundStyle(Palette.secondary)
+                    Text(account.primaryWindow?.title ?? "Current window").font(.system(size: 10, weight: .medium)).foregroundStyle(Palette.secondary)
                 }
                 UsageGauge(account: account)
-                if let date = limits?.primary?.resetDate {
+                if let date = account.primaryWindow?.resetDate {
                     resetLabel(date).padding(.top, -15).padding(.bottom, 2)
                 } else {
                     Text(account.lastUpdated == nil ? "Syncing your account…" : "Usage window unavailable")
                         .font(.system(size: 10)).foregroundStyle(Palette.secondary).padding(.bottom, 2)
                 }
-                if let secondary = limits?.secondary {
+                if let secondary = account.secondaryWindow {
                     Rectangle().fill(Color.primary.opacity(0.07)).frame(height: 0.5)
                     VStack(spacing: 6) {
                         HStack {
@@ -34,11 +38,51 @@ struct CodexUsageCard: View {
                     }.padding(.top, 6)
                 }
             }.padding(16).softSurface(radius: 22)
+            if account.isClaude {
+                if let scoped = account.claudeUsage?.scoped, !scoped.isEmpty {
+                    VStack(spacing: 9) {
+                        ForEach(scoped, id: \.name) { item in
+                            HStack {
+                                Text("\(item.name) · \(item.window.title)").foregroundStyle(Palette.secondary)
+                                Spacer()
+                                Text("\(item.window.remainingPercent)% left").fontWeight(.semibold).monospacedDigit()
+                            }.font(.system(size: 11))
+                        }
+                    }.padding(14).softSurface(radius: 18)
+                }
+            } else {
             HStack(spacing: 0) {
                 metric("Tokens used", value: account.tokenActivity?.summary.lifetimeTokens.map(TokenFormat.compact) ?? "—", detail: "All time")
                 Rectangle().fill(Color.primary.opacity(0.07)).frame(width: 0.5, height: 39)
                 metric("Reset credits", value: account.codexUsage?.rateLimitResetCredits.map { String($0.availableCount) } ?? "—", detail: "Available")
             }.padding(.vertical, 12).softSurface(radius: 18)
+            if resetCredits > 0 || resetMessage != nil, !store.showingDemo {
+                HStack(spacing: 8) {
+                    Image(systemName: "arrow.counterclockwise.circle").foregroundStyle(Palette.foreground)
+                    Text(resetMessage ?? "\(resetCredits) reset credit\(resetCredits == 1 ? "" : "s") available")
+                        .font(.system(size: 10)).foregroundStyle(Palette.secondary).fixedSize(horizontal: false, vertical: true)
+                    Spacer(minLength: 0)
+                    if resetCredits > 0 {
+                        Button(resetting ? "Resetting…" : "Use a reset") { confirmingReset = true }
+                            .buttonStyle(.plain).font(.system(size: 10, weight: .semibold)).disabled(resetting)
+                            .accessibilityIdentifier("use-reset-credit")
+                    }
+                }.padding(12).softSurface(radius: 14)
+                .alert("Use one reset credit?", isPresented: $confirmingReset) {
+                    Button("Cancel", role: .cancel) {}
+                    Button("Use reset") {
+                        resetting = true
+                        Task {
+                            do { resetMessage = try await store.useResetCredit(account) }
+                            catch { resetMessage = error.localizedDescription }
+                            resetting = false
+                        }
+                    }
+                } message: {
+                    Text("This resets \(account.name)’s current Codex usage window and uses one of its \(resetCredits) credit\(resetCredits == 1 ? "" : "s"). It can’t be undone.")
+                }
+            }
+            }
         }
     }
     private func resetLabel(_ date: Date) -> some View {

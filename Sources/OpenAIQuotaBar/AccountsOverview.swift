@@ -44,7 +44,7 @@ struct AccountsOverview: View {
                     .buttonStyle(PrimaryButtonStyle()).accessibilityIdentifier("sign-in")
             } else {
                 Button { pool.showingDevices = true } label: {
-                    Label(pool.selections.isEmpty ? "Connect your devices" : "\(pool.confirmedCount) of \(pool.devices.count) devices confirmed", systemImage: "desktopcomputer")
+                    Label(pool.selections.isEmpty ? "Connect your devices" : "\(pool.confirmedCount) of \(pool.selectedCount) selected devices ready", systemImage: "desktopcomputer")
                         .font(.system(size: 10)).foregroundStyle(Palette.secondary)
                 }.buttonStyle(.plain).accessibilityIdentifier("home-devices")
             }
@@ -58,20 +58,23 @@ struct AccountUsageRow: View {
     let syncing: Bool
     private var fraction: Double? { account.quotaFraction.map { min(1, max(0, 1 - $0)) } }
     private var tokens: String {
+        if account.isClaude {
+            return account.secondaryWindow.map { "\($0.title) · \($0.remainingPercent)% left" } ?? account.planLabel
+        }
         if account.isCodex {
             return account.tokenActivity?.summary.lifetimeTokens.map { "\(TokenFormat.compact($0)) tokens · all time" } ?? "Tokens unavailable"
         }
         return account.lastUpdated == nil ? "Tokens unavailable" : "\(TokenFormat.compact(account.usedTokens)) tokens · 30 days"
     }
-    private var window: String { account.isCodex ? account.codexUsage?.codex.primary?.title ?? "Current window" : "Custom budget" }
-    private var resetDate: Date? { account.isCodex ? account.codexUsage?.codex.primary?.resetDate : account.resetDate }
+    private var window: String { account.hasLiveQuota ? account.primaryWindow?.title ?? "Current window" : "Custom budget" }
+    private var resetDate: Date? { account.hasLiveQuota ? account.primaryWindow?.resetDate : account.resetDate }
 
     var body: some View {
         VStack(spacing: 6) {
             HStack(spacing: 8) {
                 Text(account.name).font(.system(size: 13, weight: .semibold)).lineLimit(1)
                 if !pool.activeDevices(for: account.id).isEmpty {
-                    ActiveAccountBadge(names: pool.activeDevices(for: account.id).map(\.name).joined(separator: ", "))
+                    ActiveAccountBadge(names: pool.activeDevices(for: account.id).map(\.name).joined(separator: ", "), compact: true)
                 } else if pool.isSelected(account.id) {
                     Label("Pending", systemImage: "clock").font(.system(size: 9)).foregroundStyle(Palette.secondary)
                 }
@@ -84,6 +87,7 @@ struct AccountUsageRow: View {
             HStack(spacing: 6) {
                 if syncing { Text("Syncing…") }
                 else if account.error != nil { Label("Needs attention", systemImage: "exclamationmark.circle") }
+                else if let days = account.claudeSignInDaysLeft { Label(days == 0 ? "Sign in again" : "Sign in again in \(days)d", systemImage: "clock.badge.exclamationmark") }
                 else { Text(window) }
                 Spacer(minLength: 2)
                 Text(tokens).lineLimit(1).minimumScaleFactor(0.85)
@@ -98,20 +102,20 @@ struct AccountUsageRow: View {
                 HStack(spacing: 4) {
                     Image(systemName: "clock.arrow.circlepath").accessibilityHidden(true)
                     if let date = resetDate {
-                        if account.isCodex, date <= context.date {
+                        if account.hasLiveQuota, date <= context.date {
                             Text("Reset due · refresh to update")
                         } else {
-                            Text(account.isCodex ? "Resets" : "Reminder")
+                            Text(account.hasLiveQuota ? "Resets" : "Reminder")
                             Text(date, format: .dateTime.day().month(.abbreviated).hour().minute())
                         }
                     } else {
-                        Text(account.isCodex ? "Reset date unavailable" : "No reset reminder")
+                        Text(account.hasLiveQuota ? "Reset date unavailable" : "No reset reminder")
                     }
                     Spacer(minLength: 0)
                 }.font(.system(size: 10)).foregroundStyle(Palette.secondary)
             }
             .help(resetDate.map { "\($0.formatted(date: .complete, time: .shortened)) (\(TimeZone.current.abbreviation() ?? TimeZone.current.identifier))" }
-                  ?? (account.isCodex ? "OpenAI hasn’t provided a reset time for this window." : "Set a reminder in account settings."))
+                  ?? (account.hasLiveQuota ? "The provider hasn’t given a reset time for this window." : "Set a reminder in account settings."))
         }.padding(.horizontal, 14).padding(.vertical, 10).softSurface(radius: 18)
             .contentShape(RoundedRectangle(cornerRadius: 18))
             .accessibilityElement(children: .combine)

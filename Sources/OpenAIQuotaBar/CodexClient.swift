@@ -70,7 +70,7 @@ final class CodexClient {
     }
 
     func request(_ method: String, params: [String: Any]? = nil, timeout: Double = 35) async throws -> Data {
-        let allowed: Set<String> = ["initialize", "account/login/start", "account/login/cancel", "account/read", "account/logout", "account/rateLimits/read", "account/usage/read", "getAuthStatus"]
+        let allowed: Set<String> = ["initialize", "account/login/start", "account/login/cancel", "account/read", "account/logout", "account/rateLimits/read", "account/rateLimitResetCredit/consume", "account/usage/read", "getAuthStatus"]
         guard allowed.contains(method) else { throw UsageError.message("Unsupported account operation.") }
         try Task.checkCancellation()
         guard !stopped, process.isRunning else { throw UsageError.message("The OpenAI connection is not running.") }

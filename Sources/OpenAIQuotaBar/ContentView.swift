@@ -7,6 +7,7 @@ struct ContentView: View {
     @Environment(\.colorScheme) private var scheme
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     var close: () -> Void = {}
+    var panelSize = NSSize(width: 396, height: 660)
 
     var body: some View {
         VStack(spacing: 0) {
@@ -14,23 +15,31 @@ struct ContentView: View {
                 DevicesView()
             } else if store.isSigningIn {
                 SignInView()
+            } else if store.claudeConnect != nil {
+                ClaudeConnectView()
             } else if store.showingSettings {
                 AppSettingsView()
             } else if store.showingEditor {
-                if let account = store.editingAccount, account.isCodex { ConnectedAccountView(account: account) }
+                if let account = store.editingAccount, account.hasLiveQuota { ConnectedAccountView(account: account) }
                 else { AccountEditor(account: store.editingAccount) }
             } else {
                 header
                 if let error = store.storageError {
                     Text(error).font(.caption).foregroundStyle(Palette.foreground).padding(.horizontal, 24).padding(.bottom, 10)
                 }
-                if store.showingAccountDetails, let account = store.selectedAccount { dashboard(account) }
+                if store.showingAccountDetails, let account = store.selectedAccount {
+                    GeometryReader { geometry in
+                        ScrollView {
+                            dashboard(account).frame(minHeight: geometry.size.height)
+                        }.scrollIndicators(.hidden).accessibilityIdentifier("account-content")
+                    }
+                }
                 else if !store.visibleAccounts.isEmpty { AccountsOverview() }
                 else { welcome }
                 footer
             }
         }
-        .frame(width: 396, height: 660)
+        .frame(width: panelSize.width, height: panelSize.height)
         .font(.system(size: 12))
         .tint(Palette.foreground)
         .background {
@@ -63,8 +72,14 @@ struct ContentView: View {
                 Text("A little clarity for your AI.").font(.system(size: 10)).foregroundStyle(Palette.secondary)
             }
             Spacer()
-            Button { store.startAdding() } label: { Image(systemName: "plus").font(.system(size: 12, weight: .medium)) }
-                .buttonStyle(QuietButtonStyle()).help("Connect another account").accessibilityLabel("Connect another account").accessibilityIdentifier("add-account")
+            Menu {
+                Button("OpenAI account…") { store.startAdding() }
+                Button("Claude account…") { store.startClaudeConnect() }
+            } label: {
+                Image(systemName: "plus").font(.system(size: 12, weight: .medium))
+            }
+            .menuStyle(.button).buttonStyle(QuietButtonStyle()).menuIndicator(.hidden).fixedSize()
+            .help("Connect another account").accessibilityLabel("Connect another account").accessibilityIdentifier("add-account")
             Button { store.showingSettings = true } label: { Image(systemName: "gearshape").font(.system(size: 13, weight: .medium)) }
                 .buttonStyle(QuietButtonStyle()).help("Settings").accessibilityLabel("Settings").accessibilityIdentifier("app-settings")
             Menu {
@@ -105,7 +120,7 @@ struct ContentView: View {
             Text("Your usage,\nat a glance.")
                 .font(.system(size: 30, weight: .semibold, design: .rounded)).tracking(-0.8)
                 .multilineTextAlignment(.center).lineSpacing(0).padding(.top, 19)
-            Text("Sign in to OpenAI.\nSee your usage and when it resets.")
+            Text("Sign in to OpenAI or Claude.\nSee your usage and when it resets.")
                 .font(.system(size: 12)).foregroundStyle(Palette.secondary).multilineTextAlignment(.center).lineSpacing(4).padding(.top, 11)
             HStack(spacing: 22) {
                 Label("Multiple accounts", systemImage: "person.2")
@@ -115,6 +130,9 @@ struct ContentView: View {
             Button { store.startAdding() } label: {
                 HStack(spacing: 8) { Image(systemName: "person.crop.circle"); Text("Sign in with OpenAI"); Image(systemName: "arrow.up.right").font(.system(size: 11, weight: .semibold)) }
             }.buttonStyle(PrimaryButtonStyle()).accessibilityIdentifier("sign-in").accessibilityLabel("Sign in with OpenAI")
+            Button { store.startClaudeConnect() } label: {
+                HStack(spacing: 8) { Image(systemName: Provider.claude.icon); Text("Connect Claude") }.font(.system(size: 12, weight: .semibold)).padding(.vertical, 10)
+            }.buttonStyle(.plain).foregroundStyle(Palette.foreground).padding(.top, 6).accessibilityIdentifier("connect-claude")
             Button { store.showingDemo = true } label: { Text("Explore a preview").font(.system(size: 11, weight: .medium)).padding(10) }
                 .buttonStyle(.plain).foregroundStyle(Palette.secondary).padding(.top, 4)
         }.padding(.horizontal, 28).padding(.bottom, 16).frame(maxHeight: .infinity)
@@ -132,9 +150,22 @@ struct ContentView: View {
                     .padding(.horizontal, 11).padding(.vertical, 8).background(Palette.foreground.opacity(0.12), in: Capsule())
             }
             accountSelector(account)
-            if account.isCodex { CodexUsageCard(account: account) }
+            if account.hasLiveQuota { CodexUsageCard(account: account) }
             else { usageCard(account); resetDetails(account) }
             if account.isCodex, !store.showingDemo { AccountSwitchButton(account: account) }
+            if let days = account.claudeSignInDaysLeft, !store.showingDemo {
+                HStack(alignment: .center, spacing: 8) {
+                    Image(systemName: "clock.badge.exclamationmark").foregroundStyle(Palette.foreground)
+                    Text(days == 0 ? "Claude needs you to sign in again." : "Claude asks for a new sign-in in \(days) day\(days == 1 ? "" : "s").")
+                        .font(.system(size: 10)).foregroundStyle(Palette.secondary).fixedSize(horizontal: false, vertical: true)
+                    Spacer(minLength: 0)
+                    if account.claudeConfigDir != nil {
+                        Button("Sign in") { store.startClaudeConnect(reconnect: account) }.buttonStyle(.plain).font(.system(size: 10, weight: .semibold))
+                    } else {
+                        Text("Run claude to renew").font(.system(size: 10)).foregroundStyle(Palette.secondary)
+                    }
+                }.padding(12).softSurface(radius: 14).accessibilityIdentifier("claude-signin-expiry")
+            }
             if let error = account.error {
                 HStack(alignment: .top, spacing: 8) {
                     Image(systemName: "exclamationmark.circle").foregroundStyle(Palette.foreground)
@@ -182,7 +213,7 @@ struct ContentView: View {
                         Text(account.name).font(.system(size: 13, weight: .semibold)).lineLimit(1)
                         Image(systemName: "chevron.down").font(.system(size: 8, weight: .semibold)).foregroundStyle(Palette.secondary)
                     }
-                    Text(account.isCodex ? account.planLabel : "\(account.provider.rawValue) · Organization usage").font(.system(size: 10)).foregroundStyle(Palette.secondary)
+                    Text(account.hasLiveQuota ? account.planLabel : "\(account.provider.rawValue) · Organization usage").font(.system(size: 10)).foregroundStyle(Palette.secondary)
                 }
             }.menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden).fixedSize(horizontal: false, vertical: true)
             Spacer(minLength: 0)
@@ -245,7 +276,7 @@ struct ContentView: View {
     private var footer: some View {
         HStack(spacing: 5) {
             Image(systemName: "lock.shield").font(.system(size: 9))
-            Text(store.selectedAccount == nil ? "Private by design. Right in your menu bar." : store.selectedAccount?.isCodex == true ? "Live account usage · Secured with OpenAI" : "Organization API usage · Custom budget & reminders")
+            Text(store.selectedAccount == nil ? "Private by design. Right in your menu bar." : store.selectedAccount?.isClaude == true ? "Live subscription usage · Secured with Claude" : store.selectedAccount?.isCodex == true ? "Live account usage · Secured with OpenAI" : "Organization API usage · Custom budget & reminders")
                 .font(.system(size: 9))
             Spacer(minLength: 0)
         }.foregroundStyle(Palette.secondary).padding(.horizontal, 24).padding(.vertical, 13)
@@ -259,7 +290,7 @@ struct UsageGauge: View {
     var body: some View {
         ZStack {
             Circle().trim(from: 0, to: 0.78).stroke(Color.primary.opacity(0.055), style: StrokeStyle(lineWidth: 9, lineCap: .round)).rotationEffect(.degrees(129.6))
-            Circle().trim(from: 0, to: 0.78 * (account.quotaFraction ?? (account.isCodex || account.lastUpdated == nil ? 0 : 1)))
+            Circle().trim(from: 0, to: 0.78 * (account.quotaFraction ?? (account.hasLiveQuota || account.lastUpdated == nil ? 0 : 1)))
                 .stroke(AngularGradient(colors: [Palette.muted, Palette.foreground, Palette.foreground], center: .center, startAngle: .degrees(120), endAngle: .degrees(420)), style: StrokeStyle(lineWidth: 9, lineCap: .round))
                 .rotationEffect(.degrees(129.6))
                 .shadow(color: .black.opacity(0.12), radius: 3, y: 2)
@@ -272,18 +303,18 @@ struct UsageGauge: View {
                     }
                     Text("REMAINING").font(.system(size: 8, weight: .semibold)).tracking(1.9).foregroundStyle(Palette.secondary)
                 } else {
-                    Text(account.isCodex || account.lastUpdated == nil ? "—" : TokenFormat.compact(account.usedTokens))
+                    Text(account.hasLiveQuota || account.lastUpdated == nil ? "—" : TokenFormat.compact(account.usedTokens))
                         .font(.system(size: 35, weight: .light, design: .rounded)).minimumScaleFactor(0.6).lineLimit(1)
-                    Text(account.isCodex || account.lastUpdated == nil ? "NO DATA YET" : "TOKENS USED").font(.system(size: 8, weight: .semibold)).tracking(1.4).foregroundStyle(Palette.secondary)
+                    Text(account.hasLiveQuota || account.lastUpdated == nil ? "NO DATA YET" : "TOKENS USED").font(.system(size: 8, weight: .semibold)).tracking(1.4).foregroundStyle(Palette.secondary)
                 }
             }.offset(y: -3)
-            if !account.isCodex, let remaining = account.remaining {
+            if !account.hasLiveQuota, let remaining = account.remaining {
                 Text("\(TokenFormat.compact(remaining)) tokens left").font(.system(size: 10, weight: .medium, design: .rounded))
                     .foregroundStyle(Palette.secondary).offset(y: 64)
             }
         }.frame(width: 148, height: 148).padding(6)
             .animation(reduceMotion ? nil : .easeInOut(duration: 0.55), value: account.quotaFraction)
             .accessibilityElement(children: .ignore)
-            .accessibilityLabel(account.isCodex ? account.quotaFraction.map { "\(Int($0 * 100)) percent of current Codex usage window remaining" } ?? "Codex usage unavailable" : account.remaining.map { "\($0.formatted()) tokens remaining from your custom budget" } ?? (account.lastUpdated == nil ? "Usage has not been synced yet" : "\(account.usedTokens.formatted()) tokens used"))
+            .accessibilityLabel(account.hasLiveQuota ? account.quotaFraction.map { "\(Int($0 * 100)) percent of current \(account.isClaude ? "Claude" : "Codex") usage window remaining" } ?? "\(account.isClaude ? "Claude" : "Codex") usage unavailable" : account.remaining.map { "\($0.formatted()) tokens remaining from your custom budget" } ?? (account.lastUpdated == nil ? "Usage has not been synced yet" : "\(account.usedTokens.formatted()) tokens used"))
     }
 }

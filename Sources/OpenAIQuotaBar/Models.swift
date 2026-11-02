@@ -8,7 +8,7 @@ enum Provider: String, CaseIterable, Identifiable, Codable {
 }
 
 struct Account: Identifiable, Codable, Equatable {
-    enum Connection: String, Codable { case codex, apiKey }
+    enum Connection: String, Codable { case codex, apiKey, claude }
     var id = UUID()
     var name: String
     var provider: Provider
@@ -25,6 +25,11 @@ struct Account: Identifiable, Codable, Equatable {
     var planType: String?
     var codexUsage: CodexUsage?
     var tokenActivity: CodexTokenUsage?
+    /// Private Claude configuration directory; nil uses this Mac's own Claude Code sign-in (read-only).
+    var claudeConfigDir: String?
+    var claudeUsage: ClaudeUsage?
+    /// When Claude's refresh token ends; Claude fixes it at sign-in (about 30 days) and renewals don't extend it.
+    var claudeSignInExpiresAt: Date?
 
     var remaining: Int? {
         guard lastUpdated != nil, let limit = monthlyLimit, limit > 0 else { return nil }

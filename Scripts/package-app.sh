@@ -7,6 +7,7 @@ mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
 cp .build/release/OpenAIQuotaBar "$app/Contents/MacOS/LLMUsage"
 mkdir -p "$app/Contents/Resources/Bridge"
 cp Sources/OpenAIQuotaBar/Resources/quotabar_peer.py "$app/Contents/Resources/Bridge/quotabar_peer.py"
+cp Sources/OpenAIQuotaBar/Resources/hermes_pool_sync.py "$app/Contents/Resources/Bridge/hermes_pool_sync.py"
 mkdir -p dist/LLM-Usage-Connector
 cp Sources/OpenAIQuotaBar/Resources/quotabar_peer.py dist/LLM-Usage-Connector/quotabar-peer.py
 cp Scripts/install-peer.sh dist/LLM-Usage-Connector/install.sh
@@ -19,8 +20,8 @@ cp LICENSE dist/LLM-Usage-Connector/LICENSE
 /usr/libexec/PlistBuddy -c 'Add :CFBundleDisplayName string LLM Usage' "$app/Contents/Info.plist"
 /usr/libexec/PlistBuddy -c 'Add :CFBundleExecutable string LLMUsage' "$app/Contents/Info.plist"
 /usr/libexec/PlistBuddy -c 'Add :CFBundlePackageType string APPL' "$app/Contents/Info.plist"
-/usr/libexec/PlistBuddy -c 'Add :CFBundleShortVersionString string 4.1.1' "$app/Contents/Info.plist"
-/usr/libexec/PlistBuddy -c 'Add :CFBundleVersion string 11' "$app/Contents/Info.plist"
+/usr/libexec/PlistBuddy -c 'Add :CFBundleShortVersionString string 4.4.0' "$app/Contents/Info.plist"
+/usr/libexec/PlistBuddy -c 'Add :CFBundleVersion string 17' "$app/Contents/Info.plist"
 /usr/libexec/PlistBuddy -c 'Add :LSMinimumSystemVersion string 13.0' "$app/Contents/Info.plist"
 /usr/libexec/PlistBuddy -c 'Add :LSUIElement bool true' "$app/Contents/Info.plist"
 /usr/libexec/PlistBuddy -c 'Add :NSHighResolutionCapable bool true' "$app/Contents/Info.plist"

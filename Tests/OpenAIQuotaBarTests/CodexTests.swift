@@ -115,6 +115,12 @@ final class CodexTests: XCTestCase {
         let saved = try String(contentsOf: home.appendingPathComponent("accounts.json"))
         XCTAssertFalse(saved.contains("TEST-CODE"))
         XCTAssertFalse(saved.contains("access_token"))
+        let message = try await store.useResetCredit(account)
+        XCTAssertEqual(message, "Your Codex limit was reset.")
+        let sessionHome = home.appendingPathComponent("Sessions").appendingPathComponent(account.authSessionID!.uuidString)
+        let params = try JSONSerialization.jsonObject(with: Data(contentsOf: sessionHome.appendingPathComponent("reset-consume-requests.json"))) as? [String: Any]
+        XCTAssertNotNil(UUID(uuidString: params?["idempotencyKey"] as? String ?? ""), "each attempt sends a UUID idempotency key")
+        XCTAssertNil(params?["creditId"], "the backend chooses the next available credit")
     }
     @MainActor func testCancelledLoginNeverAddsAnAccount() async throws {
         let home = FileManager.default.temporaryDirectory.appendingPathComponent("quotabar-cancel-test-\(UUID())")

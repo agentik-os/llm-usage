@@ -2,14 +2,15 @@ import SwiftUI
 
 struct ActiveAccountBadge: View {
     let names: String
+    var compact = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var appeared = false
     var body: some View {
-        Label("Active", systemImage: "checkmark.circle.fill")
+        Label(compact ? "Ready" : "Ready for new requests", systemImage: "checkmark.circle.fill")
             .font(.system(size: 10, weight: .semibold))
             .scaleEffect(appeared ? 1 : 0.8).opacity(appeared ? 1 : 0)
             .onAppear { withAnimation(reduceMotion ? nil : .spring(response: 0.4, dampingFraction: 0.6)) { appeared = true } }
-            .help("Active on: \(names)").accessibilityLabel("Active on \(names)")
+            .help("Account and live switching verified on: \(names)").accessibilityLabel("Account and live switching verified on \(names)")
     }
 }
 
@@ -17,6 +18,7 @@ struct AccountSwitchButton: View {
     let account: Account
     @EnvironmentObject private var pool: AccountPool
     @State private var targets: Set<UUID> = [PoolDevice.local.id]
+    @State private var initializedTargets = false
 
     var body: some View {
         VStack(spacing: 8) {
@@ -48,14 +50,18 @@ struct AccountSwitchButton: View {
             }.buttonStyle(PrimaryButtonStyle()).disabled(pool.isWorking || targets.isEmpty)
                 .accessibilityIdentifier("use-account").accessibilityLabel("Use this account")
             Button { pool.showingDevices = true } label: {
-                Label("\(active.count) devices active · Details", systemImage: "desktopcomputer")
+                Label("\(active.count) devices ready · Details", systemImage: "desktopcomputer")
                     .font(.system(size: 10)).foregroundStyle(Palette.secondary)
             }.buttonStyle(.plain).accessibilityIdentifier("account-devices")
             if let error = pool.error {
                 Text(error).font(.system(size: 10)).foregroundStyle(Palette.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
-        }.padding(.top, 4)
+        }.padding(.top, 4).onAppear {
+            guard !initializedTargets else { return }
+            targets = pool.lastTargets.isEmpty ? Set(pool.devices.map(\.id)) : pool.lastTargets.intersection(Set(pool.devices.map(\.id)))
+            initializedTargets = true
+        }
     }
 }
 
@@ -66,6 +72,7 @@ private extension String {
 struct DevicesView: View {
     @EnvironmentObject private var pool: AccountPool
     @State private var adding = false
+    @State private var reconnecting: PoolDevice?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -77,13 +84,21 @@ struct DevicesView: View {
                 Button { Task { await pool.synchronize() } } label: { Image(systemName: "arrow.clockwise") }
                     .buttonStyle(QuietButtonStyle()).disabled(pool.isWorking).accessibilityLabel("Refresh devices")
             }.padding(.bottom, 20)
-            Text("Your devices. Your choice.")
+            Text(pool.isWorking ? "Checking every selected device…" : "\(pool.confirmedCount) of \(pool.selectedCount) shared connections ready")
                 .font(.system(size: 13, weight: .medium)).padding(.bottom, 6)
-            Text("Switch the shared Codex connection. Running work stays open; requests already in progress finish on their original account.")
+            Text("Ready means the account, access and running Codex version are verified. Work already in progress may finish on its previous account.")
                 .font(.system(size: 11)).foregroundStyle(Palette.secondary).fixedSize(horizontal: false, vertical: true)
                 .padding(.bottom, 20)
             ScrollView {
                 VStack(alignment: .leading, spacing: 12) {
+                    if pool.preview { Text("PREVIEW · SAMPLE DEVICES").font(.system(size: 10, weight: .semibold)).foregroundStyle(Palette.secondary) }
+                    if pool.selectedCount > pool.confirmedCount {
+                        Button { Task { await pool.retryPending() } } label: {
+                            Label("Retry pending devices", systemImage: "arrow.clockwise")
+                                .frame(maxWidth: .infinity).padding(.vertical, 10)
+                        }.buttonStyle(.plain).softSurface(radius: 14).disabled(pool.isWorking)
+                            .accessibilityIdentifier("retry-pending-devices")
+                    }
                     ForEach(pool.devices) { device in deviceCard(device) }
                     if adding {
                         ConnectDeviceView { adding = false }
@@ -97,12 +112,20 @@ struct DevicesView: View {
                     }
                     VStack(alignment: .leading, spacing: 8) {
                         Text("About live switching").font(.system(size: 11, weight: .semibold))
-                        Text("Shared Codex terminals follow this selection. Older terminals and private app-server sessions need to reconnect to the shared daemon. Existing provider connections may retain their account until they reconnect.")
+                        Text("Verification covers the shared Codex connection. Separate terminals, private app servers and other Unix users need their own connection. On this Mac, terminal connections are also inspected; remote terminal coverage may be unknown.")
                         Text("Keep LLM Usage running on your Mac to renew access on the VPS. Offline devices receive your latest choice when they reconnect.")
                     }.font(.system(size: 10)).foregroundStyle(Palette.secondary).padding(.top, 6)
                 }.padding(1)
             }.scrollIndicators(.hidden)
-        }.padding(24)
+        }.padding(24).confirmationDialog("Reconnect Codex on \(reconnecting?.name ?? "this device")?", isPresented: Binding(
+            get: { reconnecting != nil }, set: { if !$0 { reconnecting = nil } }), titleVisibility: .visible) {
+            if let device = reconnecting {
+                Button("Reconnect Codex") { Task { await pool.reconnect(device) }; reconnecting = nil }
+            }
+            Button("Cancel", role: .cancel) { reconnecting = nil }
+        } message: {
+            Text("Uses the installed update. Active tasks block reconnection. Saved conversations remain; idle terminals may need to resume them. Your selected account is checked again afterward.")
+        }
     }
 
     private func deviceCard(_ device: PoolDevice) -> some View {
@@ -117,7 +140,7 @@ struct DevicesView: View {
                 }
                 Spacer()
                 if connection?.checking == true { ProgressView().controlSize(.small) }
-                else { Image(systemName: connection?.reachable == true ? "checkmark.circle" : "circle.dotted").foregroundStyle(Palette.secondary) }
+                else { Image(systemName: pool.isConfirmed(device) ? "checkmark.circle" : "exclamationmark.circle").foregroundStyle(Palette.secondary) }
             }
             if !device.isLocal {
                 HStack {
@@ -130,8 +153,58 @@ struct DevicesView: View {
                         .help("Stop syncing this VPS. Keeps its SSH setup and running sessions. You can add it again from Connect a VPS.")
                 }
             }
-            if let last = connection?.status?.lastConfirmed {
-                Text("Confirmed \(Date(timeIntervalSince1970: last).formatted(date: .abbreviated, time: .shortened))")
+            if connection?.reachable == true {
+                if let compatibility = connection?.compatibility {
+                    if let message = compatibility.message {
+                        Label("Reconnect required", systemImage: "exclamationmark.triangle")
+                            .font(.system(size: 11, weight: .semibold))
+                        Text(message).font(.system(size: 10)).foregroundStyle(Palette.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .accessibilityIdentifier("switch-compatibility-\(device.id)")
+                    } else {
+                        Label("Live switching supported · Codex \(compatibility.runningVersion ?? "")", systemImage: "checkmark.circle")
+                            .font(.system(size: 10)).foregroundStyle(Palette.secondary)
+                    }
+                } else {
+                    Text("Live switching not verified. The connection selection does not confirm every running session.")
+                        .font(.system(size: 10)).foregroundStyle(Palette.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                if let check = connection?.verification {
+                    if let shared = check.sharedTerminals, let other = check.otherTerminals {
+                        Text("\(shared) shared terminals · \(other) separate terminals")
+                            .font(.system(size: 10)).foregroundStyle(Palette.secondary)
+                    } else {
+                        Text("Terminal coverage not verified on this device.")
+                            .font(.system(size: 10)).foregroundStyle(Palette.secondary)
+                    }
+                    if let active = check.activeRequests, active > 0 {
+                        Text("\(active) tasks in progress · kept open")
+                            .font(.system(size: 10)).foregroundStyle(Palette.secondary)
+                    }
+                    if check.needsTerminalReconnect {
+                        Text("Finish work in separate terminals, then resume on the shared connection:")
+                            .font(.system(size: 10)).foregroundStyle(Palette.secondary)
+                        Text("codex --remote unix:// resume").font(.system(size: 10, design: .monospaced)).textSelection(.enabled)
+                    }
+                    if check.restartRequired {
+                        Button("Reconnect Codex safely…") { reconnecting = device }
+                            .buttonStyle(.plain).font(.system(size: 11, weight: .semibold)).disabled(pool.isWorking)
+                            .accessibilityIdentifier("reconnect-codex-\(device.id)")
+                    }
+                }
+            }
+            if let issue = connection?.error {
+                Text(issue).font(.system(size: 10)).foregroundStyle(Palette.secondary).fixedSize(horizontal: false, vertical: true)
+                    .accessibilityIdentifier("device-error-\(device.id)")
+            }
+            if pool.selections[device.id] != nil {
+                Button("Retry this device") { Task { await pool.retry(device) } }
+                    .buttonStyle(.plain).font(.system(size: 11, weight: .semibold)).disabled(pool.isWorking)
+                    .accessibilityIdentifier("retry-device-\(device.id)")
+            }
+            if let last = connection?.verification?.checkedAt {
+                Text("Checked \(Date(timeIntervalSince1970: last).formatted(date: .abbreviated, time: .shortened))")
                     .font(.system(size: 9)).foregroundStyle(Palette.secondary)
             }
             if let expiry = connection?.status?.expiresAt {
