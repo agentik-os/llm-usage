@@ -153,6 +153,7 @@ struct ContentView: View {
             if account.hasLiveQuota { CodexUsageCard(account: account) }
             else { usageCard(account); resetDetails(account) }
             if account.isCodex, !store.showingDemo { AccountSwitchButton(account: account) }
+            if account.isClaude, !store.showingDemo { ClaudeCodeSwitchButton(account: account) }
             if let days = account.claudeSignInDaysLeft, !store.showingDemo {
                 HStack(alignment: .center, spacing: 8) {
                     Image(systemName: "clock.badge.exclamationmark").foregroundStyle(Palette.foreground)

@@ -5,12 +5,13 @@
 
 Your OpenAI and Claude accounts, usage and connected devices in the macOS menu bar.
 
-LLM Usage is a native Swift app with a monochrome interface, Liquid Glass on macOS 26+, and a vibrancy fallback on macOS 13–15. Track multiple accounts, see their reset times, and choose which account your shared Codex connection uses.
+LLM Usage is a native Swift app with a monochrome interface, Liquid Glass on macOS 26+, and a vibrancy fallback on macOS 13–15. Track multiple accounts, see their reset times, and choose which account your shared Codex connection and Claude Code use.
 
 ## Features
 
 - Browser sign-in with a short device code, plus a browser callback fallback.
 - Claude subscription accounts (Pro/Max): 5-hour, weekly and per-model weekly limits, with reset times. Use this Mac’s Claude Code sign-in or add other Claude accounts.
+- **Use in Claude Code** moves Claude Code on this Mac to another connected Claude account. Terminals that are already open follow within about a minute, without a restart, and new terminals start on it.
 - **Use a reset** for OpenAI accounts that have Codex rate-limit reset credits, after confirmation.
 - Multiple accounts together, with usage bars and reset dates in your local time zone.
 - Editable account names and System, Light or Dark appearance independent of macOS.
@@ -59,7 +60,7 @@ Usage refreshes every five minutes and when opening stale data. Use the gear to 
 
 Choose **+ → Claude account…** (or **Connect Claude** on the welcome screen).
 
-- **Use this Mac’s Claude Code** shows the account Claude Code is signed in with. LLM Usage only reads that sign-in from the Keychain; it never renews or rewrites it, so it can’t sign Claude Code out. If that sign-in expires, run `claude` once and refresh.
+- **Use this Mac’s Claude Code** shows the account Claude Code is signed in with. LLM Usage reads that sign-in from the Keychain and leaves renewing it to Claude Code. If that sign-in expires, run `claude` once and refresh. The option is hidden once a connected account already shows Claude Code’s sign-in.
 - **Sign in to another Claude account** runs `claude auth login` in a private configuration directory (`~/Library/Application Support/OpenAIQuotaBar/ClaudeSessions/<id>`). Approve access in your browser, copy the code Claude shows and paste it into LLM Usage. Claude Code must be installed. LLM Usage renews these sign-ins itself. The same account also works in a terminal with `CLAUDE_CONFIG_DIR=<that directory> claude`.
 
 The home screen shows each Claude account’s most limiting window, either the 5-hour session or the weekly limit, together with its reset time. Account details also list per-model weekly limits when Claude provides them. Usage comes from the endpoint Claude Code’s `/usage` reads (`api.anthropic.com/api/oauth/usage`). Anthropic does not document this endpoint, so it may change.
@@ -67,8 +68,28 @@ The home screen shows each Claude account’s most limiting window, either the 5
 Limits:
 
 - Claude fixes a sign-in’s lifetime at about 30 days when you sign in, and renewals do not extend it. LLM Usage keeps the account connected until then and warns three days before you need to sign in again.
-- Claude accounts are usage-only. Device switching, Hermes and reset credits apply to OpenAI accounts.
+- Claude account switching covers Claude Code on this Mac. Connected devices, Hermes and reset credits apply to OpenAI accounts.
 - Gemini is not supported yet.
+
+## Switch the Claude Code account
+
+Open a Claude account and choose **Use in Claude Code**, or right-click it in the account list. The account Claude Code runs on is marked **In use**.
+
+The switch applies to every Claude Code process on this Mac that uses the default configuration, which is what plain `claude` uses:
+
+- **Terminals that are already open** keep their conversation and move to the new account without a restart. Claude Code re-reads its sign-in about every 30 seconds, so the next request after that uses the new account. A request already in flight finishes on the previous account.
+- **Terminals opened afterwards** start on the new account.
+
+How it works: LLM Usage first asks Claude which account the chosen sign-in belongs to, and renews it if needed. Only then does it replace the sign-in in Claude Code’s Keychain item (`Claude Code-credentials`) and the `oauthAccount` record in `~/.claude.json`, which is what `/status` displays. Everything else in both places is kept, including the MCP server tokens Claude Code stores in the same Keychain item. A sign-in that Claude rejects, or that belongs to a different account than expected, is never handed to Claude Code.
+
+After a switch, Claude Code and LLM Usage share one sign-in for that account. Claude Code keeps renewing it while you work, and LLM Usage copies each renewal back to the account’s private copy so the account stays connected when you switch away. If Claude Code was signed in to an account LLM Usage did not hold yet, that sign-in is kept as a new account before it is replaced. Signing in with `/login` in a terminal is detected on the next refresh.
+
+Limits:
+
+- Sessions started with their own `CLAUDE_CONFIG_DIR`, an API key, `ANTHROPIC_AUTH_TOKEN`, or another provider’s base URL do not use Claude Code’s stored sign-in and are not switched.
+- Switching covers this Mac. Claude Code on connected VPS devices is not switched.
+- The open-terminal behavior was verified with Claude Code 2.1.322. It relies on how Claude Code reloads its sign-in, which Anthropic does not document and may change.
+- Do not run `CLAUDE_CONFIG_DIR=<private directory> claude` for the account Claude Code currently uses: two processes renewing the same sign-in from different places can sign one of them out.
 
 ## Reset credits (OpenAI)
 

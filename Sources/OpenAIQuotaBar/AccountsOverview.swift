@@ -27,6 +27,15 @@ struct AccountsOverview: View {
                         .accessibilityIdentifier("leave-preview")
                 }.font(.system(size: 9)).foregroundStyle(Palette.secondary)
             }
+            if let error = store.claudeSwitchError, store.claudeSwitching == nil, !store.showingDemo {
+                HStack(alignment: .top, spacing: 8) {
+                    Image(systemName: "exclamationmark.circle").foregroundStyle(Palette.foreground)
+                    Text(error).font(.system(size: 10)).foregroundStyle(Palette.secondary).fixedSize(horizontal: false, vertical: true)
+                    Spacer(minLength: 0)
+                    Button { store.claudeSwitchError = nil } label: { Image(systemName: "xmark") }
+                        .buttonStyle(.plain).accessibilityLabel("Dismiss")
+                }.padding(12).softSurface(radius: 14).accessibilityIdentifier("claude-switch-error")
+            }
             ScrollView {
                 VStack(spacing: 8) {
                     ForEach(store.visibleAccounts) { account in
@@ -35,6 +44,9 @@ struct AccountsOverview: View {
                             .contextMenu {
                                 Button("Rename account…") { store.startEditing(account) }.disabled(store.showingDemo)
                                 Button("Refresh usage") { Task { await store.refresh(account) } }.disabled(store.showingDemo)
+                                if account.isClaude, account.claudeConfigDir != nil, !store.isClaudeCodeAccount(account) {
+                                    Button("Use in Claude Code") { Task { await store.useInClaudeCode(account) } }.disabled(!store.canSwitchClaudeCode)
+                                }
                             }
                     }
                 }.padding(1)
@@ -54,6 +66,7 @@ struct AccountsOverview: View {
 
 struct AccountUsageRow: View {
     @EnvironmentObject private var pool: AccountPool
+    @EnvironmentObject private var store: Store
     let account: Account
     let syncing: Bool
     private var fraction: Double? { account.quotaFraction.map { min(1, max(0, 1 - $0)) } }
@@ -73,7 +86,11 @@ struct AccountUsageRow: View {
         VStack(spacing: 6) {
             HStack(spacing: 8) {
                 Text(account.name).font(.system(size: 13, weight: .semibold)).lineLimit(1)
-                if !pool.activeDevices(for: account.id).isEmpty {
+                if store.claudeSwitching == account.id {
+                    Label("Switching…", systemImage: "arrow.triangle.swap").font(.system(size: 9)).foregroundStyle(Palette.secondary)
+                } else if store.isClaudeCodeAccount(account) {
+                    ClaudeCodeBadge(compact: true)
+                } else if !pool.activeDevices(for: account.id).isEmpty {
                     ActiveAccountBadge(names: pool.activeDevices(for: account.id).map(\.name).joined(separator: ", "), compact: true)
                 } else if pool.isSelected(account.id) {
                     Label("Pending", systemImage: "clock").font(.system(size: 9)).foregroundStyle(Palette.secondary)

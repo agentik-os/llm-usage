@@ -1,0 +1,4 @@
+name: headroom-local
+version: 0.1.0
+description: Compress new tool output through the local lossless Headroom sidecar.
+author: LLM Usage contributors

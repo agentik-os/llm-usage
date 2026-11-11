@@ -82,8 +82,16 @@ struct ClaudeUsage: Codable, Equatable {
 }
 
 struct ClaudeProfile: Decodable, Equatable {
-    struct AccountInfo: Decodable, Equatable { let email: String?; let display_name: String? }
-    struct Organization: Decodable, Equatable { let organization_type: String?; let rate_limit_tier: String? }
+    struct AccountInfo: Decodable, Equatable {
+        let email: String?; let display_name: String?
+        var uuid: String? = nil
+        var full_name: String? = nil
+    }
+    struct Organization: Decodable, Equatable {
+        let organization_type: String?; let rate_limit_tier: String?
+        var uuid: String? = nil
+        var name: String? = nil
+    }
     let account: AccountInfo?
     let organization: Organization?
 
@@ -98,11 +106,11 @@ struct ClaudeProfile: Decodable, Equatable {
     }
 }
 
-/// Reads Claude Code's own OAuth sign-in. Accounts using this Mac's Claude Code
-/// login are read-only: Claude Code keeps renewing them, so LLM Usage never
-/// refreshes or rewrites that grant (two refreshers would rotate each other out).
-/// Accounts added in LLM Usage get a private Claude configuration directory that
-/// only LLM Usage renews.
+/// Reads and writes Claude Code OAuth sign-ins. Each account added in LLM Usage
+/// has a private Claude configuration directory that LLM Usage renews. The
+/// account Claude Code itself uses shares its sign-in with Claude Code, which
+/// keeps renewing it; LLM Usage then only renews it once it has actually expired
+/// (two eager refreshers would rotate each other out). See `ClaudeSwitch`.
 enum ClaudeAuth {
     static let defaultService = "Claude Code-credentials"
     static let clientID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e"
@@ -124,6 +132,10 @@ enum ClaudeAuth {
             ((document["claudeAiOauth"] as? [String: Any])?["refreshTokenExpiresAt"] as? Double).map { Date(timeIntervalSince1970: $0 / 1000) }
         }
         func expires(within seconds: Double) -> Bool { expiresAt.map { $0.timeIntervalSinceNow < seconds } ?? false }
+        /// The sign-in itself, without anything else Claude Code keeps in the same Keychain item.
+        var oauth: [String: Any] { document["claudeAiOauth"] as? [String: Any] ?? [:] }
+        /// Identifies a token in saved state without storing it.
+        var digest: String { SHA256.hash(data: Data(accessToken.utf8)).map { String(format: "%02x", $0) }.joined() }
     }
 
     /// Claude Code suffixes its Keychain service with the first 8 hex characters
@@ -137,14 +149,7 @@ enum ClaudeAuth {
     static func hasLocalSignIn() async -> Bool { (try? await read(configDir: nil)) != nil }
 
     static func read(configDir: String?) async throws -> Credentials {
-        var data: Data?
-        if let stored = try? await PoolProcess.run(security, ["find-generic-password", "-s", service(configDir: configDir), "-w"], timeout: 10) {
-            data = stored
-        } else if let configDir {
-            // Claude Code falls back to a private file when the Keychain is unavailable.
-            data = try? Data(contentsOf: URL(fileURLWithPath: configDir).appendingPathComponent(".credentials.json"))
-        }
-        guard let data, let document = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+        guard let document = await readDocument(configDir: configDir),
               let oauth = document["claudeAiOauth"] as? [String: Any],
               let token = oauth["accessToken"] as? String, !token.isEmpty else {
             throw UsageError.message(configDir == nil
@@ -154,6 +159,26 @@ enum ClaudeAuth {
         return Credentials(accessToken: token, refreshToken: oauth["refreshToken"] as? String,
                            expiresAt: (oauth["expiresAt"] as? Double).map { Date(timeIntervalSince1970: $0 / 1000) },
                            subscriptionType: oauth["subscriptionType"] as? String, document: document)
+    }
+
+    /// The whole Keychain item. Besides the sign-in, Claude Code keeps other
+    /// entries there (such as MCP server tokens) that must survive every rewrite.
+    static func readDocument(configDir: String?) async -> [String: Any]? {
+        var data: Data?
+        if let stored = try? await PoolProcess.run(security, ["find-generic-password", "-s", service(configDir: configDir), "-w"], timeout: 10) {
+            data = stored
+        } else if let configDir {
+            // Claude Code falls back to a private file when the Keychain is unavailable.
+            data = try? Data(contentsOf: URL(fileURLWithPath: configDir).appendingPathComponent(".credentials.json"))
+        }
+        return data.flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
+    }
+
+    /// Replaces only the sign-in inside a Keychain item and keeps its other entries.
+    static func writeOAuth(_ oauth: [String: Any], configDir: String?) async throws {
+        var document = await readDocument(configDir: configDir) ?? [:]
+        document["claudeAiOauth"] = oauth
+        try await store(document, configDir: configDir)
     }
 
     /// Renews an LLM Usage-owned sign-in and stores it where Claude Code expects it,
@@ -184,14 +209,25 @@ enum ClaudeAuth {
         return try await read(configDir: configDir)
     }
 
-    /// Writes through `security -i` with hex data so the secret never appears in process arguments.
-    private static func store(_ document: [String: Any], configDir: String) async throws {
+    /// `security -i` reads one command line of limited length.
+    static let interactiveCommandLimit = 4032
+
+    /// Writes through `security -i` with hex data so the secret never appears in
+    /// process arguments. An item too large for that command line (Claude Code's
+    /// own item also holds MCP server tokens) is passed as arguments, exactly as
+    /// Claude Code itself saves it.
+    static func store(_ document: [String: Any], configDir: String?) async throws {
         let json = try JSONSerialization.data(withJSONObject: document)
         let hex = json.map { String(format: "%02x", $0) }.joined()
+        let arguments = ["add-generic-password", "-U", "-a", NSUserName(), "-s", service(configDir: configDir), "-X", hex]
         let command = "add-generic-password -U -a \"\(NSUserName())\" -s \"\(service(configDir: configDir))\" -X \(hex)\n"
-        _ = try await PoolProcess.run(security, ["-i"], input: Data(command.utf8), timeout: 10)
+        if command.utf8.count <= interactiveCommandLimit {
+            _ = try await PoolProcess.run(security, ["-i"], input: Data(command.utf8), timeout: 10)
+        } else {
+            _ = try await PoolProcess.run(security, arguments, timeout: 10)
+        }
         guard (try? await read(configDir: configDir))?.accessToken == (document["claudeAiOauth"] as? [String: Any])?["accessToken"] as? String else {
-            throw UsageError.message("The renewed Claude sign-in couldn’t be saved to the Keychain.")
+            throw UsageError.message("The Claude sign-in couldn’t be saved to the Keychain.")
         }
     }
 
