@@ -44,3 +44,16 @@ final class UsageTests: XCTestCase {
         XCTAssertNil(store.selectedAccount)
     }
 }
+
+final class AccountEmailTests: XCTestCase {
+    func testMenuTitleShowsTheEmailOnlyWhenItAddsInformation() {
+        var account = Account(name: "Work", provider: .claude)
+        XCTAssertEqual(account.menuTitle, "Work")
+        account.email = "work@example.com"
+        XCTAssertEqual(account.menuTitle, "Work · work@example.com")
+        account.name = "work@example.com"
+        XCTAssertEqual(account.menuTitle, "work@example.com")
+        account.email = ""
+        XCTAssertEqual(account.menuTitle, "work@example.com")
+    }
+}

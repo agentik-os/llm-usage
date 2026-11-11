@@ -86,7 +86,12 @@ struct AppSettingsView: View {
                                 Button { store.startEditing(account) } label: {
                                     HStack(spacing: 10) {
                                         ProviderMark(provider: account.provider, size: 27)
-                                        Text(account.name).font(.system(size: 12, weight: .medium)).lineLimit(1)
+                                        VStack(alignment: .leading, spacing: 2) {
+                                            Text(account.name).font(.system(size: 12, weight: .medium)).lineLimit(1)
+                                            if let email = account.email, !email.isEmpty {
+                                                Text(email).font(.system(size: 10)).foregroundStyle(Palette.secondary).lineLimit(1).truncationMode(.middle)
+                                            }
+                                        }
                                         Spacer(minLength: 6)
                                         Image(systemName: "pencil").font(.system(size: 11)).foregroundStyle(Palette.secondary)
                                     }.padding(10).softSurface(radius: 13).contentShape(Rectangle())

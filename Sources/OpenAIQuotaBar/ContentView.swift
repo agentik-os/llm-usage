@@ -202,8 +202,8 @@ struct ContentView: View {
             Menu {
                 ForEach(store.visibleAccounts) { item in
                     Button { store.selectedID = item.id } label: {
-                        if item.id == account.id { Label(item.name, systemImage: "checkmark") }
-                        else { Text(item.name) }
+                        if item.id == account.id { Label(item.menuTitle, systemImage: "checkmark") }
+                        else { Text(item.menuTitle) }
                     }
                 }
                 Divider()
@@ -213,6 +213,10 @@ struct ContentView: View {
                     HStack(spacing: 6) {
                         Text(account.name).font(.system(size: 13, weight: .semibold)).lineLimit(1)
                         Image(systemName: "chevron.down").font(.system(size: 8, weight: .semibold)).foregroundStyle(Palette.secondary)
+                    }
+                    if let email = account.email, !email.isEmpty {
+                        Text(email).font(.system(size: 10)).foregroundStyle(Palette.secondary).lineLimit(1).truncationMode(.middle)
+                            .accessibilityIdentifier("account-email")
                     }
                     Text(account.hasLiveQuota ? account.planLabel : "\(account.provider.rawValue) · Organization usage").font(.system(size: 10)).foregroundStyle(Palette.secondary)
                 }
