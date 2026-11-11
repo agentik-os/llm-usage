@@ -30,6 +30,8 @@ struct Account: Identifiable, Codable, Equatable {
     var claudeUsage: ClaudeUsage?
     /// When Claude's refresh token ends; Claude fixes it at sign-in (about 30 days) and renewals don't extend it.
     var claudeSignInExpiresAt: Date?
+    /// Whether automatic rollover may move Claude Code to this account.
+    var inRollover: Bool?
 
     var remaining: Int? {
         guard lastUpdated != nil, let limit = monthlyLimit, limit > 0 else { return nil }

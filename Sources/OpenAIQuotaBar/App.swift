@@ -44,6 +44,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var clickMonitor: Any?
     private var localMonitor: Any?
     private var refreshTimer: Timer?
+    private var rolloverTimer: Timer?
     private var hermesSyncTimer: Timer?
     private let arguments = ProcessInfo.processInfo.arguments
 
@@ -149,6 +150,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             refreshTimer = Timer.scheduledTimer(withTimeInterval: 300, repeats: true) { [weak self] _ in
                 Task { @MainActor in await self?.store.refreshStale() }
             }
+            rolloverTimer = Timer.scheduledTimer(withTimeInterval: 120, repeats: true) { [weak self] _ in
+                Task { @MainActor in await self?.store.rolloverTick() }
+            }
+            Task { await store.rolloverTick() }
         }
         localMonitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown]) { [weak self] event in
             guard let self else { return event }
@@ -216,6 +221,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if let clickMonitor { NSEvent.removeMonitor(clickMonitor) }
         if let localMonitor { NSEvent.removeMonitor(localMonitor) }
         refreshTimer?.invalidate()
+        rolloverTimer?.invalidate()
         store.shutdown()
     }
 }

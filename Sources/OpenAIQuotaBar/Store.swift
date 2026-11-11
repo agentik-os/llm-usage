@@ -69,6 +69,11 @@ final class Store: ObservableObject {
     @Published private(set) var claudeSwitchedAt: Date?
     @Published var claudeSwitchError: String?
     private var claudeCodeChecked: Date?
+    @Published private(set) var rollover = RolloverSettings()
+    @Published var rolloverEvent: RolloverEvent?
+    /// Why a due rollover couldn't happen, e.g. no chosen account has usage left.
+    @Published private(set) var rolloverNotice: String?
+    private var rollingOver = false
     private let claudeTarget: ClaudeSwitch.Target
     var onAccountConnected: (() -> Void)?
     var onThemeChanged: ((AppTheme) -> Void)?
@@ -102,7 +107,10 @@ final class Store: ObservableObject {
         file = accountsFile ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("OpenAIQuotaBar/accounts.json")
         if !ephemeral, let data = try? Data(contentsOf: settingsFile),
-           let settings = try? JSONDecoder().decode(AppSettings.self, from: data) { theme = settings.theme }
+           let settings = try? JSONDecoder().decode(AppSettings.self, from: data) {
+            theme = settings.theme
+            rollover = settings.rollover ?? RolloverSettings()
+        }
         guard !ephemeral, FileManager.default.fileExists(atPath: file.path) else { return }
         do { accounts = try JSONDecoder().decode([Account].self, from: Data(contentsOf: file)) }
         catch { canPersist = false; storageError = "Saved accounts couldn’t be read. Your original file has been preserved." }
@@ -138,12 +146,15 @@ final class Store: ObservableObject {
 
     private var settingsFile: URL { file.deletingLastPathComponent().appendingPathComponent("settings.json") }
     func setTheme(_ theme: AppTheme) throws {
-        if !ephemeral {
-            try FileManager.default.createDirectory(at: settingsFile.deletingLastPathComponent(), withIntermediateDirectories: true)
-            try JSONEncoder().encode(AppSettings(theme: theme)).write(to: settingsFile, options: .atomic)
-        }
+        try saveSettings(AppSettings(theme: theme, rollover: rollover))
         self.theme = theme
         onThemeChanged?(theme)
+    }
+
+    private func saveSettings(_ settings: AppSettings) throws {
+        guard !ephemeral else { return }
+        try FileManager.default.createDirectory(at: settingsFile.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try JSONEncoder().encode(settings).write(to: settingsFile, options: .atomic)
     }
 
     func renameAccount(_ id: UUID, to name: String) throws {
@@ -788,6 +799,65 @@ final class Store: ObservableObject {
         accounts = updated
     }
 
+    // MARK: Claude rollover
+
+    func setRollover(_ settings: RolloverSettings) throws {
+        var settings = settings
+        settings.threshold = min(100, max(1, settings.threshold))
+        try saveSettings(AppSettings(theme: theme, rollover: settings))
+        rollover = settings
+        rolloverNotice = nil
+        if settings.enabled { Task { await rolloverTick() } }
+    }
+
+    func setInRollover(_ id: UUID, _ included: Bool) throws {
+        guard let index = accounts.firstIndex(where: { $0.id == id && $0.isClaude }) else { return }
+        var updated = accounts
+        updated[index].inRollover = included ? true : nil
+        try persist(updated)
+        accounts = updated
+        rolloverNotice = nil
+        if rollover.enabled { Task { await evaluateRollover() } }
+    }
+
+    /// Rollover accounts with a private sign-in, the only ones Claude Code can be moved to.
+    var rolloverAccounts: [Account] { accounts.filter { $0.isClaude && $0.claudeConfigDir != nil } }
+
+    /// Keeps the account Claude Code uses fresh between full refreshes, so the threshold is noticed in time.
+    func rolloverTick() async {
+        guard rollover.enabled, !ephemeral, !showingDemo else { return }
+        await syncClaudeCode()
+        if let active = accounts.first(where: { isClaudeCodeAccount($0) }),
+           active.lastUpdated.map({ Date().timeIntervalSince($0) > 100 }) ?? true { await refresh(active) }
+        await evaluateRollover()
+    }
+
+    /// Moves Claude Code off an account that reached the threshold, to the chosen account with the most usage left.
+    func evaluateRollover() async {
+        guard rollover.enabled, !ephemeral, !showingDemo, !rollingOver, claudeSwitching == nil,
+              let active = accounts.first(where: { isClaudeCodeAccount($0) }) else { return }
+        guard ClaudeRollover.isDue(active, threshold: rollover.threshold) else { rolloverNotice = nil; return }
+        rollingOver = true
+        defer { rollingOver = false }
+        let used = ClaudeRollover.used(active) ?? rollover.threshold
+        for candidate in ClaudeRollover.candidates(accounts, excluding: active.id, threshold: rollover.threshold) {
+            // Decide on a reading taken now: another terminal may have used this account since the last refresh.
+            if candidate.lastUpdated.map({ Date().timeIntervalSince($0) > 60 }) ?? true { await refresh(candidate) }
+            guard let current = accounts.first(where: { $0.id == candidate.id }),
+                  ClaudeRollover.isAvailable(current, threshold: rollover.threshold), canSwitchClaudeCode else { continue }
+            await useInClaudeCode(current)
+            guard isClaudeCodeAccount(current) else { continue }
+            claudeSwitchError = nil
+            rolloverNotice = nil
+            rolloverEvent = RolloverEvent(from: active.name, to: current.name, date: Date())
+            return
+        }
+        claudeSwitchError = nil
+        rolloverNotice = rolloverAccounts.contains(where: { $0.inRollover == true && $0.id != active.id })
+            ? "\(active.name) is at \(used)%. No rollover account has usage left."
+            : "\(active.name) is at \(used)%. Choose rollover accounts in Settings."
+    }
+
     // MARK: Codex reset credits
 
     /// Redeems one Codex rate-limit reset credit through the account's own Codex sign-in.
@@ -817,11 +887,13 @@ final class Store: ObservableObject {
         for account in accounts where account.lastUpdated.map({ Date().timeIntervalSince($0) > 300 }) ?? true {
             await refresh(account)
         }
+        await evaluateRollover()
     }
     func refreshAll() async {
         guard !showingDemo, !ephemeral else { return }
         await syncClaudeCode()
         for account in accounts { await refresh(account) }
+        await evaluateRollover()
         await synchronizeHermes()
     }
 }

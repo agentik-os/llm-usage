@@ -21,7 +21,7 @@ enum AppTheme: String, Codable, CaseIterable, Identifiable {
     }
 }
 
-struct AppSettings: Codable { var theme: AppTheme }
+struct AppSettings: Codable { var theme: AppTheme; var rollover: RolloverSettings? }
 
 struct AppSettingsView: View {
     @EnvironmentObject private var store: Store
@@ -72,6 +72,9 @@ struct AppSettingsView: View {
                         }.font(.system(size: 12, weight: .medium)).padding(12).softSurface(radius: 14)
                     }.buttonStyle(.plain).padding(.top, 17).accessibilityIdentifier("devices-settings")
                     RuntimeSettingsView().padding(.top, 18)
+                    if !store.showingDemo, store.accounts.contains(where: { $0.isClaude && $0.claudeConfigDir != nil }) {
+                        RolloverSettingsView().padding(.top, 29)
+                    }
                     HStack {
                         Eyebrow(text: "Accounts")
                         Spacer()
