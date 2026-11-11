@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 
 struct AccountsOverview: View {
     @EnvironmentObject private var store: Store
@@ -58,7 +59,15 @@ struct AccountsOverview: View {
                     ForEach(store.visibleAccounts) { account in
                         Button { store.openAccount(account) } label: { AccountUsageRow(account: account, syncing: store.refreshing.contains(account.id)) }
                             .buttonStyle(.plain).accessibilityIdentifier("account-row-\(account.id)")
+                            .help(account.email ?? "")
                             .contextMenu {
+                                if let email = account.email, !email.isEmpty {
+                                    Button("Copy \(email)") {
+                                        NSPasteboard.general.clearContents()
+                                        NSPasteboard.general.setString(email, forType: .string)
+                                    }
+                                    Divider()
+                                }
                                 Button("Rename account…") { store.startEditing(account) }.disabled(store.showingDemo)
                                 Button("Refresh usage") { Task { await store.refresh(account) } }.disabled(store.showingDemo)
                                 if account.isClaude, account.claudeConfigDir != nil, !store.showingDemo {

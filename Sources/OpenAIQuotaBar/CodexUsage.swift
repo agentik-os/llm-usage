@@ -43,6 +43,11 @@ struct CodexTokenUsage: Codable, Equatable {
 }
 
 extension Account {
+    /// Name with the sign-in email, for menus where several accounts are listed together.
+    var menuTitle: String {
+        guard let email, !email.isEmpty, email != name else { return name }
+        return "\(name) · \(email)"
+    }
     var isCodex: Bool { connection == .codex }
     var isClaude: Bool { connection == .claude }
     /// Accounts whose limits come from the provider as live usage windows.
