@@ -55,9 +55,21 @@ final class Store: ObservableObject {
     @Published var editingAccount: Account?
     @Published private(set) var refreshing: Set<UUID> = []
     @Published var storageError: String?
+    private var hermesSyncing = false
     @Published var signInState: SignInState?
     @Published var browserOpened = false
     @Published private(set) var canResumeSignIn = false
+    @Published var claudeConnect: ClaudeConnectState?
+    @Published private(set) var claudeLocalAvailable = false
+    private var claudeLogin: ClaudeLoginSession?
+    private var claudeReconnecting: Account?
+    /// The account Claude Code on this Mac is signed in to, confirmed by Claude for the sign-in in force.
+    @Published private(set) var claudeCode: ClaudeCodeState?
+    @Published private(set) var claudeSwitching: UUID?
+    @Published private(set) var claudeSwitchedAt: Date?
+    @Published var claudeSwitchError: String?
+    private var claudeCodeChecked: Date?
+    private let claudeTarget: ClaudeSwitch.Target
     var onAccountConnected: (() -> Void)?
     var onThemeChanged: ((AppTheme) -> Void)?
     private var editorReturnsToSettings = false
@@ -80,8 +92,10 @@ final class Store: ObservableObject {
 
     init(ephemeral: Bool = false, accountsFile: URL? = nil,
          makeClient: ((URL) throws -> CodexClient)? = nil,
-         openBrowser: ((URL) -> Bool)? = nil) {
+         openBrowser: ((URL) -> Bool)? = nil,
+         claudeTarget: ClaudeSwitch.Target = .claudeCode) {
         self.ephemeral = ephemeral
+        self.claudeTarget = claudeTarget
         self.pool = AccountPool(preview: ephemeral, file: accountsFile?.deletingLastPathComponent().appendingPathComponent("pool.json"))
         self.makeClient = makeClient ?? { try CodexClient(home: $0) }
         self.openBrowser = openBrowser ?? { NSWorkspace.shared.open($0) }
@@ -92,6 +106,18 @@ final class Store: ObservableObject {
         guard !ephemeral, FileManager.default.fileExists(atPath: file.path) else { return }
         do { accounts = try JSONDecoder().decode([Account].self, from: Data(contentsOf: file)) }
         catch { canPersist = false; storageError = "Saved accounts couldn’t be read. Your original file has been preserved." }
+        if canPersist { pruneClaudeSessions() }
+        claudeCode = (try? Data(contentsOf: claudeCodeFile)).flatMap { try? JSONDecoder().decode(ClaudeCodeState.self, from: $0) }
+    }
+
+    /// Removes private Claude sign-ins left by an interrupted connection (e.g. quitting mid-sign-in).
+    private func pruneClaudeSessions() {
+        let used = Set(accounts.compactMap(\.claudeConfigDir))
+        guard let entries = try? FileManager.default.contentsOfDirectory(atPath: claudeSessionsRoot.path) else { return }
+        for name in entries {
+            let dir = claudeSessionsRoot.appendingPathComponent(name, isDirectory: true).path
+            if !used.contains(dir) { Task { await ClaudeAuth.forget(configDir: dir) } }
+        }
     }
     var visibleAccounts: [Account] { showingDemo ? demoAccounts : accounts }
     var selectedAccount: Account? { visibleAccounts.first { $0.id == selectedID } ?? visibleAccounts.first }
@@ -148,9 +174,38 @@ final class Store: ObservableObject {
         defer { client.stop() }
         try await client.start()
         struct Auth: Decodable { let authToken: String? }
-        let reply = try JSONDecoder().decode(Auth.self, from: await client.request("getAuthStatus", params: ["includeToken": true, "refreshToken": false]))
+        var reply = try JSONDecoder().decode(Auth.self, from: await client.request("getAuthStatus", params: ["includeToken": true, "refreshToken": false]))
+        if let token = reply.authToken, PoolGrant.needsRefresh(token) {
+            // The existing native sign-in owns refresh credentials. Ask Codex
+            // to renew them there instead of copying refresh tokens to Hermes.
+            reply = try JSONDecoder().decode(Auth.self, from: await client.request("getAuthStatus", params: ["includeToken": true, "refreshToken": true]))
+        }
         guard let token = reply.authToken else { throw UsageError.message("Sign in again to use this account.") }
         return try PoolGrant.make(account: account, selectionID: selectionID, token: token)
+    }
+
+    func synchronizeHermes() async {
+        guard !ephemeral, !showingDemo, !hermesSyncing, !isSigningIn,
+              refreshing.isEmpty, let configuration = HermesPoolSync.configuration else { return }
+        let source = accounts.filter { $0.isCodex }
+        guard !source.isEmpty else { return }
+        hermesSyncing = true
+        defer { hermesSyncing = false }
+        do {
+            var grants: [PoolGrant] = []
+            for account in source {
+                grants.append(try await routingGrant(account.id, selectionID: "hermes-local"))
+            }
+            let current = accounts.filter { $0.isCodex }
+            guard current.count == source.count, zip(current, source).allSatisfy({
+                $0.id == $1.id && $0.authSessionID == $1.authSessionID && $0.name == $1.name
+            }) else {
+                return
+            }
+            _ = try await HermesPoolSync.apply(grants, configuration: configuration)
+        } catch {
+            HermesPoolSync.reportFailure()
+        }
     }
 
     struct PendingSignIn: Codable {
@@ -370,6 +425,10 @@ final class Store: ObservableObject {
         disconnecting.insert(account.id)
         defer { disconnecting.remove(account.id) }
         activeClients[account.id]?.stop()
+        if account.isClaude, !ephemeral, let dir = account.claudeConfigDir {
+            // Only LLM Usage's private sign-in is removed; this Mac's Claude Code login is never touched.
+            await ClaudeAuth.forget(configDir: dir)
+        }
         if account.isCodex, !ephemeral {
             let client = try makeClient(sessionHome(account.authSessionID ?? account.id))
             defer { client.stop() }
@@ -385,6 +444,7 @@ final class Store: ObservableObject {
         completionTask?.cancel()
         loginTimeout?.cancel()
         loginClient?.stop()
+        claudeLogin?.cancel()
         activeClients.values.forEach { $0.stop() }
     }
 
@@ -406,7 +466,7 @@ final class Store: ObservableObject {
         try persist(updated)
         accounts = updated
         selectedID = accounts.first?.id
-        if !ephemeral, !account.isCodex { try Keychain.shared.delete(for: account.id) }
+        if !ephemeral, !account.hasLiveQuota { try Keychain.shared.delete(for: account.id) }
     }
     private func persist(_ accounts: [Account]) throws {
         guard !ephemeral else { return }
@@ -427,10 +487,14 @@ final class Store: ObservableObject {
             await refreshCodex(account)
             return
         }
+        if account.isClaude {
+            await refreshClaude(account)
+            return
+        }
         var value: Int?
         var failure: String?
         do {
-            guard account.provider == .openai else { throw UsageError.message("The Claude Code connector isn’t available yet.") }
+            guard account.provider == .openai else { throw UsageError.message("Connect this Claude account again.") }
             value = try await OpenAIUsage.fetch(adminKey: Keychain.shared.get(for: account.id))
         } catch { failure = error.localizedDescription }
         // Resolve the account after awaiting: switching or deleting accounts must be safe.
@@ -460,15 +524,305 @@ final class Store: ObservableObject {
         }
         do { try persist(accounts) } catch { storageError = "Usage updated, but couldn’t be saved to disk." }
     }
+    // MARK: Claude
+
+    private var claudeSessionsRoot: URL { file.deletingLastPathComponent().appendingPathComponent("ClaudeSessions", isDirectory: true) }
+
+    func startClaudeConnect(reconnect account: Account? = nil) {
+        cancelSignIn()
+        cancelClaudeConnect()
+        showingEditor = false
+        showingSettings = false
+        claudeReconnecting = account
+        guard canPersist else { claudeConnect = .failed("Your saved accounts need recovery before another account can be added."); return }
+        if let account, account.claudeConfigDir != nil { beginClaudeSignIn(); return }
+        claudeConnect = .choose
+        guard !ephemeral else { claudeLocalAvailable = true; return }
+        Task {
+            let available = await ClaudeAuth.hasLocalSignIn()
+            await syncClaudeCode()
+            // Offered only while no connected account already shows Claude Code's sign-in.
+            claudeLocalAvailable = available && !accounts.contains { isClaudeCodeAccount($0) }
+        }
+    }
+
+    /// Adds this Mac's Claude Code sign-in without copying or renewing it.
+    func useLocalClaudeCode() {
+        guard !ephemeral else { return }
+        claudeConnect = .verifying
+        Task {
+            do {
+                let credentials = try await ClaudeAuth.read(configDir: nil)
+                try await addClaudeAccount(configDir: nil, credentials: credentials)
+            } catch { claudeConnect = .failed(error.localizedDescription) }
+        }
+    }
+
+    func beginClaudeSignIn() {
+        guard !ephemeral else { claudeConnect = .waiting(URL(string: "https://claude.com")!); return }
+        guard let executable = ClaudeLoginSession.executable() else {
+            claudeConnect = .failed("Install Claude Code to sign in to another Claude account.")
+            return
+        }
+        claudeLogin?.cancel()
+        let dir = claudeSessionsRoot.appendingPathComponent(UUID().uuidString, isDirectory: true).path
+        let session = ClaudeLoginSession(executable: executable, configDir: dir)
+        claudeLogin = session
+        claudeConnect = .starting
+        Task {
+            do {
+                let url = try await session.start()
+                guard claudeLogin === session else { return }
+                claudeConnect = .waiting(url)
+                _ = openBrowser(url)
+            } catch {
+                guard claudeLogin === session else { return }
+                claudeConnect = .failed(error.localizedDescription)
+                await ClaudeAuth.forget(configDir: dir)
+            }
+        }
+    }
+
+    func openClaudeBrowser() {
+        guard !ephemeral, case let .waiting(url) = claudeConnect else { return }
+        _ = openBrowser(url)
+    }
+
+    func submitClaudeCode(_ code: String) {
+        guard let session = claudeLogin, case .waiting = claudeConnect else { return }
+        claudeConnect = .verifying
+        Task {
+            do {
+                try await session.submit(code: code)
+                let credentials = try await ClaudeAuth.read(configDir: session.configDir)
+                guard claudeLogin === session else { return }
+                try await addClaudeAccount(configDir: session.configDir, credentials: credentials)
+                claudeLogin = nil
+            } catch {
+                guard claudeLogin === session else { return }
+                claudeLogin = nil
+                claudeConnect = .failed(error.localizedDescription)
+                await ClaudeAuth.forget(configDir: session.configDir)
+            }
+        }
+    }
+
+    func cancelClaudeConnect() {
+        if let session = claudeLogin {
+            session.cancel()
+            Task { await ClaudeAuth.forget(configDir: session.configDir) }
+        }
+        claudeLogin = nil
+        claudeConnect = nil
+        claudeReconnecting = nil
+    }
+
+    private func addClaudeAccount(configDir: String?, credentials: ClaudeAuth.Credentials) async throws {
+        let profile = try await ClaudeAuth.get(ClaudeAuth.profileURL, token: credentials.accessToken, as: ClaudeProfile.self)
+        let email = profile.account?.email
+        if let duplicate = accounts.first(where: { $0.isClaude && $0.email != nil && $0.email == email && $0.id != claudeReconnecting?.id }) {
+            throw UsageError.message("\(duplicate.name) already shows this Claude account.")
+        }
+        var account = claudeReconnecting ?? Account(name: email?.components(separatedBy: "@").first ?? "Claude account", provider: .claude)
+        let previousDir = account.claudeConfigDir
+        account.provider = .claude
+        account.connection = .claude
+        account.claudeConfigDir = configDir
+        account.email = email
+        account.planType = profile.planName ?? credentials.subscriptionType
+        account.error = nil
+        account.claudeUsage = nil
+        account.lastUpdated = nil
+        var updated = accounts
+        if let index = updated.firstIndex(where: { $0.id == account.id }) { updated[index] = account }
+        else { updated.append(account) }
+        try persist(updated)
+        accounts = updated
+        if let previousDir, previousDir != configDir { await ClaudeAuth.forget(configDir: previousDir) }
+        if let configDir, ClaudeSwitch.sameAccount(email, claudeCode?.email) {
+            // A fresh sign-in for the account Claude Code already uses replaces Claude Code's
+            // older one, so both keep sharing a single sign-in instead of renewing against each other.
+            if let active = try? await ClaudeSwitch.activate(privateDir: configDir, expectedEmail: email, target: claudeTarget) {
+                setClaudeCode(ClaudeCodeState(email: email, tokenDigest: active.digest))
+            }
+        }
+        selectedID = account.id
+        showingDemo = false
+        showingAccountDetails = false
+        claudeConnect = nil
+        claudeReconnecting = nil
+        onAccountConnected?()
+        await refresh(account)
+    }
+
+    private func refreshClaude(_ account: Account) async {
+        var usage: ClaudeUsage?
+        var failure: String?
+        var signInExpiry: Date?
+        await syncClaudeCode()
+        do {
+            // The account Claude Code uses shares Claude Code's sign-in, which Claude Code renews.
+            let shared = account.claudeConfigDir != nil && isClaudeCodeAccount(account)
+            var credentials = try await ClaudeAuth.read(configDir: shared ? claudeTarget.configDir : account.claudeConfigDir)
+            defer { signInExpiry = credentials.signInExpiresAt }
+            if let dir = account.claudeConfigDir, credentials.expires(within: shared ? 0 : 300) {
+                credentials = try await renewClaude(credentials, dir: dir, shared: shared)
+            }
+            do {
+                usage = ClaudeUsage(try await ClaudeAuth.get(ClaudeAuth.usageURL, token: credentials.accessToken, as: ClaudeUsage.Response.self))
+            } catch is ClaudeAuthExpired {
+                guard let dir = account.claudeConfigDir else {
+                    throw UsageError.message("Claude Code renews this sign-in when you use it. Open Claude Code, then refresh.")
+                }
+                credentials = try await renewClaude(credentials, dir: dir, shared: shared)
+                usage = ClaudeUsage(try await ClaudeAuth.get(ClaudeAuth.usageURL, token: credentials.accessToken, as: ClaudeUsage.Response.self))
+            }
+        } catch { failure = error.localizedDescription }
+        guard let index = accounts.firstIndex(where: { $0.id == account.id && $0.claudeConfigDir == account.claudeConfigDir }) else { return }
+        accounts[index].error = failure
+        if let signInExpiry { accounts[index].claudeSignInExpiresAt = signInExpiry }
+        if let usage { accounts[index].claudeUsage = usage; accounts[index].lastUpdated = Date() }
+        do { try persist(accounts) } catch { storageError = "Usage updated, but couldn’t be saved to disk." }
+    }
+
+    /// Renews a private sign-in. For the account Claude Code uses, Claude Code may have
+    /// renewed first: its newer sign-in is adopted, otherwise the renewal is handed to it.
+    private func renewClaude(_ credentials: ClaudeAuth.Credentials, dir: String, shared: Bool) async throws -> ClaudeAuth.Credentials {
+        guard shared else { return try await ClaudeAuth.renew(credentials, configDir: dir) }
+        if let current = try? await ClaudeAuth.read(configDir: claudeTarget.configDir),
+           current.accessToken != credentials.accessToken, !current.expires(within: 0) { return current }
+        do {
+            let renewed = try await ClaudeAuth.renew(credentials, configDir: dir)
+            try await ClaudeAuth.writeOAuth(renewed.oauth, configDir: claudeTarget.configDir)
+            if let email = claudeCode?.email { setClaudeCode(ClaudeCodeState(email: email, tokenDigest: renewed.digest)) }
+            return renewed
+        } catch {
+            // Claude Code won the race for the same renewal; its result is the valid sign-in.
+            if let current = try? await ClaudeAuth.read(configDir: claudeTarget.configDir),
+               current.accessToken != credentials.accessToken { return current }
+            throw error
+        }
+    }
+
+    // MARK: Claude Code account switching
+
+    private var claudeCodeFile: URL { file.deletingLastPathComponent().appendingPathComponent("claude-code.json") }
+
+    /// Whether Claude Code on this Mac currently runs on this account.
+    func isClaudeCodeAccount(_ account: Account) -> Bool {
+        guard account.isClaude else { return false }
+        if showingDemo { return false }
+        return account.claudeConfigDir == nil || ClaudeSwitch.sameAccount(account.email, claudeCode?.email)
+    }
+    var canSwitchClaudeCode: Bool { !ephemeral && !showingDemo && canPersist && claudeSwitching == nil }
+
+    private func setClaudeCode(_ state: ClaudeCodeState?) {
+        guard state != claudeCode else { return }
+        claudeCode = state
+        guard !ephemeral else { return }
+        if let state, let data = try? JSONEncoder().encode(state) { try? data.write(to: claudeCodeFile, options: .atomic) }
+        else { try? FileManager.default.removeItem(at: claudeCodeFile) }
+    }
+
+    /// Reads which account Claude Code is signed in to and keeps that account's private
+    /// copy identical to Claude Code's sign-in. Claude is asked only when the sign-in changed
+    /// (a renewal by Claude Code, or `/login` in a terminal), never on a plain refresh.
+    func syncClaudeCode(force: Bool = false) async {
+        guard !ephemeral, claudeSwitching == nil || force, accounts.contains(where: \.isClaude) else { return }
+        if !force, let checked = claudeCodeChecked, Date().timeIntervalSince(checked) < 5 { return }
+        claudeCodeChecked = Date()
+        guard let current = try? await ClaudeAuth.read(configDir: claudeTarget.configDir) else { setClaudeCode(nil); return }
+        if current.digest != claudeCode?.tokenDigest {
+            // An unreadable identity (offline, expired, rate-limited) changes nothing; it is checked again later.
+            guard let profile = try? await ClaudeSwitch.identify(current), let email = profile.account?.email else { return }
+            setClaudeCode(ClaudeCodeState(email: email, tokenDigest: current.digest))
+        }
+        // Only a sign-in Claude confirmed for this account ever overwrites the private copy.
+        guard let owner = accounts.first(where: { $0.claudeConfigDir != nil && isClaudeCodeAccount($0) }), let dir = owner.claudeConfigDir,
+              (try? await ClaudeAuth.read(configDir: dir))?.accessToken != current.accessToken else { return }
+        try? await ClaudeAuth.writeOAuth(current.oauth, configDir: dir)
+    }
+
+    /// Moves Claude Code on this Mac to `account`: terminals that are already open follow
+    /// within about a minute, and every terminal opened afterwards starts on it.
+    func useInClaudeCode(_ account: Account) async {
+        guard canSwitchClaudeCode, account.isClaude, let dir = account.claudeConfigDir, !isClaudeCodeAccount(account) else { return }
+        claudeSwitching = account.id
+        claudeSwitchError = nil
+        defer { claudeSwitching = nil }
+        do {
+            // Keep the outgoing account's newest sign-in before it leaves Claude Code.
+            await syncClaudeCode(force: true)
+            try await keepCurrentClaudeCodeSignIn()
+            let active = try await ClaudeSwitch.activate(privateDir: dir, expectedEmail: account.email, target: claudeTarget)
+            setClaudeCode(ClaudeCodeState(email: account.email, tokenDigest: active.digest))
+            claudeSwitchedAt = Date()
+        } catch {
+            claudeSwitchError = error.localizedDescription
+            return
+        }
+        for item in accounts where item.isClaude && (item.id == account.id || item.error != nil) { await refresh(item) }
+    }
+
+    /// Claude Code's present sign-in must stay connected somewhere before it is replaced.
+    /// An account LLM Usage doesn't hold privately yet becomes its own private account.
+    private func keepCurrentClaudeCodeSignIn() async throws {
+        guard let state = claudeCode, let current = try? await ClaudeAuth.read(configDir: claudeTarget.configDir),
+              current.digest == state.tokenDigest,
+              !accounts.contains(where: { $0.claudeConfigDir != nil && ClaudeSwitch.sameAccount($0.email, state.email) }) else { return }
+        let dir = claudeSessionsRoot.appendingPathComponent(UUID().uuidString, isDirectory: true).path
+        try await ClaudeSwitch.capture(current, into: dir, from: claudeTarget)
+        var updated = accounts
+        if let index = updated.firstIndex(where: { $0.isClaude && $0.claudeConfigDir == nil }) {
+            updated[index].claudeConfigDir = dir
+            updated[index].email = state.email
+        } else {
+            var kept = Account(name: state.email?.components(separatedBy: "@").first ?? "Claude account", provider: .claude)
+            kept.connection = .claude
+            kept.claudeConfigDir = dir
+            kept.email = state.email
+            kept.planType = current.subscriptionType?.capitalized
+            updated.append(kept)
+        }
+        do { try persist(updated) } catch { await ClaudeAuth.forget(configDir: dir); throw error }
+        accounts = updated
+    }
+
+    // MARK: Codex reset credits
+
+    /// Redeems one Codex rate-limit reset credit through the account's own Codex sign-in.
+    /// Returns a short user-facing outcome; usage is re-read afterwards so the gauge shows the backend's result.
+    func useResetCredit(_ account: Account) async throws -> String {
+        guard !ephemeral, !showingDemo, account.isCodex else { throw UsageError.message("Reset credits are available for OpenAI accounts only.") }
+        struct Reply: Decodable { let outcome: String }
+        let client = try makeClient(sessionHome(account.authSessionID ?? account.id))
+        defer { client.stop() }
+        try await client.start()
+        // One key per attempt: a retried request can never redeem a second credit.
+        let reply = try JSONDecoder().decode(Reply.self, from: await client.request("account/rateLimitResetCredit/consume", params: ["idempotencyKey": UUID().uuidString], timeout: 30))
+        client.stop()
+        if let current = accounts.first(where: { $0.id == account.id }) { await refresh(current) }
+        switch reply.outcome {
+        case "reset": return "Your Codex limit was reset."
+        case "nothingToReset": return "Nothing to reset right now, so no credit was used."
+        case "noCredit": return "No reset credit is available for this account."
+        case "alreadyRedeemed": return "This reset credit was already used."
+        default: return "OpenAI returned an unrecognized result. Check your usage before trying again."
+        }
+    }
+
     func refreshStale() async {
         guard !showingDemo else { return }
+        await syncClaudeCode()
         for account in accounts where account.lastUpdated.map({ Date().timeIntervalSince($0) > 300 }) ?? true {
             await refresh(account)
         }
     }
     func refreshAll() async {
         guard !showingDemo, !ephemeral else { return }
+        await syncClaudeCode()
         for account in accounts { await refresh(account) }
+        await synchronizeHermes()
     }
 }
 
@@ -525,4 +879,14 @@ enum OpenAIUsage {
         } while cursor != nil
         return total
     }
+}
+
+/// Which account Claude Code is signed in to; the digest identifies the confirmed sign-in without storing it.
+struct ClaudeCodeState: Codable, Equatable {
+    var email: String?
+    var tokenDigest: String
+}
+
+enum ClaudeConnectState: Equatable {
+    case choose, starting, waiting(URL), verifying, failed(String)
 }

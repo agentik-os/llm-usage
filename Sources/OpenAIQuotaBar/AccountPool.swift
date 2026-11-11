@@ -9,16 +9,31 @@ struct PoolGrant: Codable {
     let chatgptAccountId: String
     let planType: String
 
-    static func make(account: Account, selectionID: String, token: String) throws -> PoolGrant {
+    private static func claims(_ token: String) throws -> [String: Any] {
         let parts = token.split(separator: ".")
         guard parts.count == 3 else { throw UsageError.message("OpenAI did not provide a usable account token.") }
         var payload = String(parts[1]).replacingOccurrences(of: "-", with: "+").replacingOccurrences(of: "_", with: "/")
         payload += String(repeating: "=", count: (4 - payload.count % 4) % 4)
-        guard let data = Data(base64Encoded: payload), let claims = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let auth = claims["https://api.openai.com/auth"] as? [String: Any],
+        guard let data = Data(base64Encoded: payload), let value = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            throw UsageError.message("OpenAI did not provide a usable account token.")
+        }
+        return value
+    }
+
+    static func needsRefresh(_ token: String, within seconds: Double = 600) -> Bool {
+        guard let value = try? claims(token), let expires = value["exp"] as? Double else { return true }
+        return expires <= Date().timeIntervalSince1970 + seconds
+    }
+
+    static func make(account: Account, selectionID: String, token: String) throws -> PoolGrant {
+        let claims = try claims(token)
+        guard let auth = claims["https://api.openai.com/auth"] as? [String: Any],
               let accountID = auth["chatgpt_account_id"] as? String, !accountID.isEmpty,
               let expires = claims["exp"] as? Double, expires > Date().timeIntervalSince1970 + 30 else {
             throw UsageError.message("This account needs a fresh sign-in before it can be used.")
+        }
+        if let expected = account.codexUsage?.accountId, !expected.isEmpty, expected != accountID {
+            throw UsageError.message("The connected account changed. Refresh it before using it.")
         }
         return PoolGrant(selectionID: selectionID, accountID: account.id.uuidString, name: account.name,
                          accessToken: token, chatgptAccountId: accountID, planType: account.planType ?? "")
@@ -47,12 +62,50 @@ struct PeerStatus: Decodable {
     var hermesInstalled: Bool?
 }
 
+struct SwitchCompatibility: Decodable {
+    var runningVersion: String?
+    var installedVersion: String?
+    var liveSwitchSupported: Bool
+    var restartRequired: Bool
+
+    var message: String? {
+        guard !liveSwitchSupported else { return nil }
+        if restartRequired {
+            return "Codex \(runningVersion ?? "unknown") is still running. The fix is installed; restart Codex after saving pending work to activate reliable switching."
+        }
+        return "Codex \(runningVersion ?? "unknown") can keep using the previous account. Update Codex to a version with the account-switch fix, then restart it."
+    }
+}
+
 struct DeviceConnection {
     var status: PeerStatus?
     var reachable = false
     var checking = false
     var error: String?
     var checkedAt: Date?
+    var compatibility: SwitchCompatibility?
+    var verification: SwitchVerification?
+}
+
+struct SwitchVerification: Decodable {
+    var accountID: String?
+    var selectionID: String?
+    var credentialConfirmed: Bool
+    var backendVerified: Bool
+    var runningVersion: String?
+    var installedVersion: String?
+    var liveSwitchSupported: Bool
+    var restartRequired: Bool
+    var openConversations: Int?
+    var activeRequests: Int?
+    var sharedTerminals: Int?
+    var otherTerminals: Int?
+    var coverageKnown: Bool
+    var standaloneAgkSessions: Int?
+    var checkedAt: Double
+
+    var ready: Bool { credentialConfirmed && backendVerified && liveSwitchSupported }
+    var needsTerminalReconnect: Bool { (otherTerminals ?? 0) > 0 || (standaloneAgkSessions ?? 0) > 0 }
 }
 
 struct DeviceSelection: Codable, Equatable {
@@ -109,6 +162,7 @@ final class AccountPool: ObservableObject {
     @Published private(set) var isWorking = false
     @Published var error: String?
     @Published var showingDevices = false
+    @Published private(set) var lastTargets: Set<UUID> = []
     var grantProvider: ((UUID, String) async throws -> PoolGrant)?
     private var selectionID: String?
     @Published private(set) var selections: [UUID: DeviceSelection] = [:]
@@ -190,13 +244,25 @@ final class AccountPool: ObservableObject {
             // Persist intent before delivery: offline targets retry their own choice.
             try save(account: local?.accountID, selection: local?.selectionID, devices: devices, choices: choices)
             selections = choices; accountID = local?.accountID; selectionID = local?.selectionID
-            for device in targets {
-                if preview {
+            lastTargets = Set(targets.map(\.id))
+            showingDevices = true
+            if preview {
+                for device in targets {
                     connections[device.id] = DeviceConnection(status: PeerStatus(accountID: account.id.uuidString,
-                        selectionID: selection, name: account.name, codexConnected: true, state: "active"), reachable: true, checkedAt: Date())
-                } else { await update(device, grant: grant) }
+                        selectionID: selection, name: account.name, codexConnected: true, state: "active"), reachable: true, checkedAt: Date(),
+                        compatibility: SwitchCompatibility(runningVersion: "0.155.1", installedVersion: "0.155.1", liveSwitchSupported: true, restartRequired: false),
+                        verification: SwitchVerification(accountID: account.id.uuidString, selectionID: selection,
+                            credentialConfirmed: true, backendVerified: true, runningVersion: "0.155.1", installedVersion: "0.155.1",
+                            liveSwitchSupported: true, restartRequired: false, openConversations: 2, activeRequests: 0,
+                            sharedTerminals: 2, otherTerminals: 0, coverageKnown: true, standaloneAgkSessions: 0,
+                            checkedAt: Date().timeIntervalSince1970))
+                }
+            } else {
+                await withTaskGroup(of: Void.self) { group in
+                    for device in targets { group.addTask { await self.update(device, grant: grant) } }
+                }
             }
-            if targets.contains(where: { !isConfirmed($0) }) { error = "Some devices have not confirmed. Their selection is saved and will retry." }
+            if targets.contains(where: { !isConfirmed($0) }) { error = "Switch incomplete. Your choice is saved; check the devices below." }
         } catch { self.error = error.localizedDescription }
     }
 
@@ -207,6 +273,16 @@ final class AccountPool: ObservableObject {
     }
 
     func isConfirmed(_ device: PoolDevice) -> Bool {
+        guard isConnectionSelected(device) else { return false }
+        if preview { return true }
+        guard let check = connections[device.id]?.verification,
+              let choice = selections[device.id],
+              check.accountID == choice.accountID.uuidString, check.selectionID == choice.selectionID,
+              Date().timeIntervalSince1970 - check.checkedAt < 90 else { return false }
+        return check.ready && !check.needsTerminalReconnect
+    }
+
+    func isConnectionSelected(_ device: PoolDevice) -> Bool {
         guard let choice = selections[device.id], let connection = connections[device.id],
               connection.reachable, let status = connection.status else { return false }
         return status.accountID == choice.accountID.uuidString && status.selectionID == choice.selectionID
@@ -220,12 +296,12 @@ final class AccountPool: ObservableObject {
     func command(_ device: PoolDevice, _ command: String, input: Data? = nil, timeout: Double = 30) async throws -> Data {
         if let transport { return try await transport(device, command, input) }
         if device.isLocal { return try await PoolProcess.run(python, [resource.path, command], input: input, timeout: timeout) }
-        if command == "runtime" {
+        if ["runtime", "compatibility", "verify-switch", "reconnect"].contains(command) {
             guard Self.validSSHHost(device.sshHost) else { throw UsageError.message("Invalid SSH host.") }
             let script = try String(contentsOf: resource, encoding: .utf8)
             let quoted = "'" + script.replacingOccurrences(of: "'", with: "'\"'\"'") + "'"
             return try await PoolProcess.run("/usr/bin/ssh", ["-T", "-o", "BatchMode=yes", "-o", "ConnectTimeout=6",
-                "--", device.sshHost, "python3 -c " + quoted + " runtime"], input: input, timeout: timeout)
+                "--", device.sshHost, "python3 -c " + quoted + " " + command], input: input, timeout: timeout)
         }
         guard Self.validSSHHost(device.sshHost), ["rpc", "status", "install-hermes"].contains(command) else {
             throw UsageError.message("Use an SSH alias or user@hostname.")
@@ -261,7 +337,19 @@ final class AccountPool: ObservableObject {
         connections[device.id, default: DeviceConnection()].checking = true
         do {
             let status = try await send(device, grant: grant)
-            connections[device.id] = DeviceConnection(status: status, reachable: true, checkedAt: Date())
+            var connection = DeviceConnection(status: status, reachable: true, checkedAt: Date())
+            if let choice = selections[device.id] {
+                do {
+                    let check = try await verify(device, choice: choice)
+                    connection.verification = check
+                    connection.compatibility = SwitchCompatibility(runningVersion: check.runningVersion,
+                        installedVersion: check.installedVersion, liveSwitchSupported: check.liveSwitchSupported,
+                        restartRequired: check.restartRequired)
+                } catch {
+                    connection.error = "Account sent, verification incomplete. Retry this device."
+                }
+            }
+            connections[device.id] = connection
         } catch {
             var previous = connections[device.id] ?? DeviceConnection()
             previous.reachable = false; previous.checking = false
@@ -274,12 +362,86 @@ final class AccountPool: ObservableObject {
         guard !isWorking, !preview else { return }
         isWorking = true; error = nil
         defer { isWorking = false }
-        for device in devices {
-            do { await update(device, grant: try await currentGrant(for: device)) }
-            catch {
+        await refreshDevices(devices)
+    }
+
+    private func refreshDevices(_ targets: [PoolDevice]) async {
+        // Refresh each account once: concurrent OAuth renewals can invalidate
+        // each other. Device delivery remains independent and concurrent.
+        var grants: [UUID: PoolGrant] = [:]
+        var failedAccounts = Set<UUID>()
+        var ready: [(PoolDevice, PoolGrant?)] = []
+        for device in targets {
+            guard let choice = selections[device.id] else { ready.append((device, nil)); continue }
+            do {
+                if failedAccounts.contains(choice.accountID) { throw UsageError.message("Account needs attention.") }
+                if grants[choice.accountID] == nil { grants[choice.accountID] = try await currentGrant(for: device) }
+                let grant = grants[choice.accountID].map {
+                    PoolGrant(selectionID: choice.selectionID, accountID: $0.accountID, name: $0.name,
+                              accessToken: $0.accessToken, chatgptAccountId: $0.chatgptAccountId, planType: $0.planType)
+                }
+                ready.append((device, grant))
+            } catch {
+                failedAccounts.insert(choice.accountID)
                 connections[device.id, default: DeviceConnection()].reachable = false
-                self.error = "An account needs attention. Sign in again to renew its devices."
+                connections[device.id]?.error = "Sign in again to renew this account."
             }
+        }
+        await withTaskGroup(of: Void.self) { group in
+            for (device, grant) in ready { group.addTask { await self.update(device, grant: grant) } }
+        }
+    }
+
+    private func refreshDevice(_ device: PoolDevice) async {
+        do { await update(device, grant: try await currentGrant(for: device)) }
+        catch {
+            connections[device.id, default: DeviceConnection()].reachable = false
+            connections[device.id]?.error = "Sign in again to renew this account."
+            self.error = "An account needs attention. Sign in again to renew its devices."
+        }
+    }
+
+    private func verify(_ device: PoolDevice, choice: DeviceSelection, reconnect: Bool = false) async throws -> SwitchVerification {
+        struct Reply: Decodable { let ok: Bool; let result: SwitchVerification?; let error: String? }
+        var input = try JSONEncoder().encode(choice); input.append(0x0A)
+        let data = try await command(device, reconnect ? "reconnect" : "verify-switch", input: input, timeout: reconnect ? 55 : 35)
+        let reply = try JSONDecoder().decode(Reply.self, from: data)
+        guard reply.ok, let result = reply.result else {
+            throw UsageError.message(reply.error ?? "Could not verify this connection.")
+        }
+        guard result.accountID == choice.accountID.uuidString, result.selectionID == choice.selectionID else {
+            throw UsageError.message("The selection changed. Retry this device.")
+        }
+        return result
+    }
+
+    func retry(_ device: PoolDevice) async {
+        guard !isWorking, devices.contains(device) else { return }
+        isWorking = true; error = nil
+        defer { isWorking = false }
+        if !preview { await refreshDevice(device) }
+    }
+
+    func retryPending() async {
+        guard !isWorking else { return }
+        let targets = devices.filter { selections[$0.id] != nil && !isConfirmed($0) }
+        isWorking = true; error = nil
+        defer { isWorking = false }
+        if !preview {
+            await refreshDevices(targets)
+        }
+    }
+
+    func reconnect(_ device: PoolDevice) async {
+        guard !isWorking, let choice = selections[device.id] else { return }
+        isWorking = true; error = nil
+        defer { isWorking = false }
+        guard !preview else { return }
+        do {
+            _ = try await verify(device, choice: choice, reconnect: true)
+            await refreshDevice(device)
+        } catch {
+            connections[device.id]?.error = error.localizedDescription
         }
     }
 
@@ -365,10 +527,18 @@ final class AccountPool: ObservableObject {
         if status.state == "expired" { return "Account expired · open LLM Usage" }
         if status.state == "attention" { return "Needs attention" }
         if isConfirmed(device) {
-            return "Using \(status.name ?? "selected account")"
+            return "\(status.name ?? "Selected account") · ready for new requests"
         }
+        if let check = connection.verification {
+            if !check.credentialConfirmed { return "Account not confirmed · retry" }
+            if !check.liveSwitchSupported { return check.restartRequired ? "Account selected · reconnect required" : "Account selected · update Codex" }
+            if !check.backendVerified { return "Account selected · access not verified" }
+            if check.needsTerminalReconnect { return "Shared connection ready · other terminals remain" }
+        }
+        if isConnectionSelected(device) { return "Account selected · verification pending" }
         return selections[device.id] == nil ? "Ready to switch" : "Waiting to switch"
     }
 
     var confirmedCount: Int { devices.filter { isConfirmed($0) }.count }
+    var selectedCount: Int { devices.filter { selections[$0.id] != nil }.count }
 }

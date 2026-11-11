@@ -122,7 +122,7 @@ struct ConnectedAccountView: View {
                 Color.clear.frame(width: 32, height: 32)
             }
             Spacer()
-            ProviderMark(size: 66)
+            ProviderMark(provider: account.provider, size: 66)
             Text(account.email ?? account.name).font(.system(size: 18, weight: .semibold, design: .rounded))
                 .lineLimit(2).multilineTextAlignment(.center).textSelection(.enabled).padding(.top, 20)
             Text(account.planLabel).font(.system(size: 12)).foregroundStyle(Palette.secondary).padding(.top, 7)
@@ -140,8 +140,12 @@ struct ConnectedAccountView: View {
             if let error { Text(error).font(.caption).foregroundStyle(Palette.foreground).padding(.bottom, 15) }
             Button(action: saveName) { Label("Save name", systemImage: "checkmark") }
                 .buttonStyle(PrimaryButtonStyle()).disabled(!validName || removing).accessibilityIdentifier("save-account-name")
-            Button { store.beginSignIn(reconnect: account) } label: { Label("Sign in again", systemImage: "arrow.clockwise") }
-                .buttonStyle(.plain).font(.system(size: 11)).padding(.top, 18).disabled(removing)
+            if account.isClaude && account.claudeConfigDir == nil {
+                Text("Uses this Mac’s Claude Code sign-in.").font(.system(size: 11)).foregroundStyle(Palette.secondary).padding(.top, 18)
+            } else {
+                Button { if account.isClaude { store.startClaudeConnect(reconnect: account) } else { store.beginSignIn(reconnect: account) } } label: { Label("Sign in again", systemImage: "arrow.clockwise") }
+                    .buttonStyle(.plain).font(.system(size: 11)).padding(.top, 18).disabled(removing)
+            }
             Button(removing ? "Disconnecting…" : "Disconnect account") { confirming = true }
                 .buttonStyle(.plain).font(.system(size: 11)).foregroundStyle(Palette.secondary).padding(.top, 18).disabled(removing)
             Text("Your other accounts stay signed in.").font(.system(size: 10)).foregroundStyle(Palette.secondary).padding(.top, 24)
@@ -156,7 +160,7 @@ struct ConnectedAccountView: View {
                         removing = false
                     }
                 }
-            } message: { Text("This only signs the account out of LLM Usage.") }
+            } message: { Text(account.isClaude && account.claudeConfigDir == nil ? "Claude Code stays signed in on this Mac." : "This only signs the account out of LLM Usage.") }
     }
 
     private func saveName() {

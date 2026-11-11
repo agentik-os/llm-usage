@@ -72,9 +72,6 @@ struct AccountEditor: View {
                     if account != nil {
                         Button("Remove this account…", role: .destructive) { confirmingRemoval = true }
                             .font(.system(size: 11)).buttonStyle(.plain).foregroundStyle(Palette.foreground)
-                    } else {
-                        HStack { Image(systemName: "asterisk"); Text("Claude Code"); Spacer(); Text("Coming later").font(.system(size: 9)) }
-                            .font(.system(size: 11)).foregroundStyle(.tertiary)
                     }
                 }.padding(.horizontal, 1).padding(.bottom, 8)
             }.scrollIndicators(.hidden)

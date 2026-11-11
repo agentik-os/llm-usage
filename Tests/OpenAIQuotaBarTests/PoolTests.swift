@@ -25,7 +25,7 @@ final class PoolTests: XCTestCase {
         XCTAssertEqual(restored.devices, [.local])
         restored.transport = { device, command, _ in
             XCTAssertTrue(device.isLocal, "Removed VPS must never be polled or switched")
-            XCTAssertEqual(command, "status")
+            XCTAssertTrue(["status", "verify-switch"].contains(command))
             return Data("{\"ok\":true,\"result\":{\"state\":\"ready\"}}".utf8)
         }
         await restored.synchronize()
@@ -61,6 +61,46 @@ final class PoolTests: XCTestCase {
         XCTAssertThrowsError(try PoolGrant.make(account: account, selectionID: "s", token: token([
             "exp": Date().timeIntervalSince1970 - 10, "https://api.openai.com/auth": ["chatgpt_account_id": "w"]])))
         XCTAssertThrowsError(try PoolGrant.make(account: account, selectionID: "s", token: token(["exp": Date().timeIntervalSince1970 + 3600])))
+    }
+
+    func testGrantRefreshesBeforeExpiryAndRejectsChangedWorkspace() throws {
+        let claims: [String: Any] = ["exp": Date().timeIntervalSince1970 + 120,
+                                   "https://api.openai.com/auth": ["chatgpt_account_id": "workspace-1"]]
+        XCTAssertTrue(PoolGrant.needsRefresh(try token(claims)))
+        XCTAssertTrue(PoolGrant.needsRefresh("invalid"))
+        XCTAssertFalse(PoolGrant.needsRefresh(try token(["exp": Date().timeIntervalSince1970 + 3600])))
+        var account = Account.samples[0]
+        account.codexUsage?.accountId = "different-workspace"
+        XCTAssertThrowsError(try PoolGrant.make(account: account, selectionID: "hermes-local", token: token(claims)))
+    }
+
+    @MainActor func testRoutingGrantRenewsThroughItsOwnCodexProfile() async throws {
+        for behavior in ["--grant-fresh", "--grant-expiring", "--grant-wrong-account"] {
+            let home = FileManager.default.temporaryDirectory.appendingPathComponent("llm-hermes-grant-\(UUID())")
+            try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
+            defer { try? FileManager.default.removeItem(at: home) }
+            var account = Account.samples[0]
+            account.authSessionID = UUID()
+            account.codexUsage?.accountId = "fixture-workspace"
+            let file = home.appendingPathComponent("accounts.json")
+            try JSONEncoder().encode([account]).write(to: file)
+            let fixture = Bundle.module.url(forResource: "fake-codex", withExtension: "py", subdirectory: "Fixtures")!
+            let store = Store(accountsFile: file, makeClient: {
+                try CodexClient(home: $0, executable: URL(fileURLWithPath: "/usr/bin/python3"), prefixArguments: [fixture.path, behavior])
+            })
+            defer { store.shutdown() }
+            do {
+                let grant = try await store.routingGrant(account.id, selectionID: "hermes-local")
+                XCTAssertNotEqual(behavior, "--grant-wrong-account")
+                XCTAssertEqual(grant.chatgptAccountId, "fixture-workspace")
+                XCTAssertFalse(PoolGrant.needsRefresh(grant.accessToken))
+            } catch {
+                XCTAssertEqual(behavior, "--grant-wrong-account")
+            }
+            let profile = home.appendingPathComponent("Sessions").appendingPathComponent(account.authSessionID!.uuidString)
+            let requests = try JSONDecoder().decode([Bool].self, from: Data(contentsOf: profile.appendingPathComponent("grant-refresh-requests.json")))
+            XCTAssertEqual(requests, behavior == "--grant-expiring" ? [false, true] : [false])
+        }
     }
 
     @MainActor func testSSHInputCannotBecomeAnOptionOrShellCommand() {
@@ -104,6 +144,10 @@ final class PoolTests: XCTestCase {
             PoolGrant(selectionID: selection, accountID: id.uuidString, name: "Fixture", accessToken: "fake", chatgptAccountId: "fake", planType: "pro")
         }
         pool.transport = { device, command, data in
+            if command == "verify-switch" {
+                let choice = try JSONDecoder().decode(DeviceSelection.self, from: XCTUnwrap(data))
+                return try self.verification(choice, supported: false)
+            }
             XCTAssertEqual(command, "rpc")
             let request = try JSONSerialization.jsonObject(with: XCTUnwrap(data)) as! [String: Any]
             let grant = request["grant"] as! [String: Any]
@@ -115,6 +159,7 @@ final class PoolTests: XCTestCase {
         await pool.use(b, on: [vps.id])
         XCTAssertEqual(sent.map { $0.0 }, [vps.id], "A VPS-only switch must never contact this Mac or another VPS")
         XCTAssertEqual(pool.accountID, a.id)
+        XCTAssertTrue(pool.showingDevices, "Show the actual switch result after a click")
         XCTAssertEqual(pool.selections[vps.id]?.accountID, b.id)
         XCTAssertEqual(pool.confirmedCount, 0)
         XCTAssertTrue(pool.isSelected(a.id)); XCTAssertTrue(pool.isSelected(b.id))
@@ -123,8 +168,12 @@ final class PoolTests: XCTestCase {
         sent.removeAll(); offline = false
         await pool.synchronize()
         XCTAssertEqual(Dictionary(uniqueKeysWithValues: sent), [PoolDevice.local.id: a.id.uuidString, vps.id: b.id.uuidString, other.id: a.id.uuidString])
-        XCTAssertEqual(pool.confirmedCount, 3)
-        XCTAssertEqual(pool.activeDevices(for: b.id).map(\.id), [vps.id])
+        XCTAssertEqual(pool.confirmedCount, 0, "Token selection on an old server must never count as a completed switch")
+        XCTAssertTrue(pool.isConnectionSelected(vps))
+        XCTAssertTrue(pool.activeDevices(for: b.id).isEmpty)
+        XCTAssertEqual(pool.connections[vps.id]?.compatibility?.restartRequired, true)
+        XCTAssertNotNil(pool.connections[vps.id]?.compatibility?.message)
+
         sent.removeAll()
         await pool.use(b, on: [PoolDevice.local.id])
         XCTAssertEqual(sent.map { $0.0 }, [PoolDevice.local.id])
@@ -134,7 +183,92 @@ final class PoolTests: XCTestCase {
         XCTAssertTrue(sent.isEmpty)
         await pool.use(b)
         XCTAssertEqual(Set(sent.map { $0.0 }), Set(pool.devices.map(\.id)))
-        XCTAssertEqual(pool.confirmedCount, 3)
+        XCTAssertEqual(pool.confirmedCount, 0)
+    }
+
+    func verification(_ choice: DeviceSelection, supported: Bool = true, backend: Bool = true,
+                      other: Int = 0, checkedAt: Double = Date().timeIntervalSince1970) throws -> Data {
+        try JSONSerialization.data(withJSONObject: ["ok": true, "result": [
+            "accountID": choice.accountID.uuidString, "selectionID": choice.selectionID,
+            "credentialConfirmed": true, "backendVerified": backend,
+            "runningVersion": supported ? "0.155.1" : "0.153.4", "installedVersion": "0.155.1",
+            "liveSwitchSupported": supported, "restartRequired": !supported,
+            "coverageKnown": true, "otherTerminals": other, "sharedTerminals": 3,
+            "standaloneAgkSessions": 0, "checkedAt": checkedAt]])
+    }
+
+    @MainActor func testSwitchRequiresFreshMatchingBackendVerificationAndNoSeparateTerminals() async throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("llm-verify-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let pool = AccountPool(file: dir.appendingPathComponent("pool.json"))
+        pool.grantProvider = { id, selection in
+            PoolGrant(selectionID: selection, accountID: id.uuidString, name: "Fixture", accessToken: "fake", chatgptAccountId: "fake", planType: "pro")
+        }
+        var state = "ready"
+        pool.transport = { _, command, input in
+            if command == "verify-switch" {
+                let choice = try JSONDecoder().decode(DeviceSelection.self, from: XCTUnwrap(input))
+                if state == "unavailable" { throw CancellationError() }
+                return try self.verification(state == "mismatch" ? DeviceSelection(accountID: UUID(), selectionID: "other") : choice,
+                    backend: state != "rejected", other: state == "separate" ? 1 : 0,
+                    checkedAt: Date().timeIntervalSince1970 - (state == "stale" ? 100 : 0))
+            }
+            let request = try JSONSerialization.jsonObject(with: XCTUnwrap(input)) as! [String: Any]
+            let grant = request["grant"] as! [String: Any]
+            return try JSONSerialization.data(withJSONObject: ["ok": true, "result": [
+                "accountID": grant["accountID"]!, "selectionID": grant["selectionID"]!, "state": "active", "codexConnected": true]])
+        }
+        await pool.use(Account.samples[0])
+        XCTAssertEqual(pool.confirmedCount, 1)
+        for failure in ["rejected", "separate", "stale", "unavailable", "mismatch"] {
+            state = failure
+            await pool.retry(.local)
+            XCTAssertEqual(pool.confirmedCount, 0, failure)
+            XCTAssertTrue(pool.isConnectionSelected(.local), "Preserve selection, distinguish failed verification")
+        }
+        state = "ready"
+        await pool.retryPending()
+        XCTAssertEqual(pool.confirmedCount, 1)
+        XCTAssertEqual(AccountPool(file: dir.appendingPathComponent("pool.json")).selections, pool.selections)
+    }
+
+    @MainActor func testOfflineDeviceDoesNotBlockOthersAndRetrySkipsConfirmedDevices() async throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("llm-concurrent-\(UUID())")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let file = dir.appendingPathComponent("pool.json")
+        let remote = PoolDevice(name: "Offline", sshHost: "fixture")
+        try JSONSerialization.data(withJSONObject: ["devices": [["id": remote.id.uuidString, "name": remote.name, "sshHost": remote.sshHost]]]).write(to: file)
+        let pool = AccountPool(file: file)
+        var grantReads = 0, localConfirmedWhileRemoteWaited = false, contacted: [UUID] = []
+        pool.grantProvider = { id, selection in
+            grantReads += 1
+            return PoolGrant(selectionID: selection, accountID: id.uuidString, name: "Fixture", accessToken: "fake", chatgptAccountId: "fake", planType: "pro")
+        }
+        pool.transport = { device, command, input in
+            if command == "verify-switch" {
+                return try self.verification(JSONDecoder().decode(DeviceSelection.self, from: XCTUnwrap(input)))
+            }
+            contacted.append(device.id)
+            if !device.isLocal {
+                try await Task.sleep(nanoseconds: 100_000_000)
+                localConfirmedWhileRemoteWaited = pool.isConfirmed(.local)
+                throw CancellationError()
+            }
+            let request = try JSONSerialization.jsonObject(with: XCTUnwrap(input)) as! [String: Any]
+            let grant = request["grant"] as! [String: Any]
+            return try JSONSerialization.data(withJSONObject: ["ok": true, "result": [
+                "accountID": grant["accountID"]!, "selectionID": grant["selectionID"]!, "state": "active", "codexConnected": true]])
+        }
+        await pool.use(Account.samples[0])
+        XCTAssertTrue(localConfirmedWhileRemoteWaited)
+        XCTAssertEqual(pool.confirmedCount, 1)
+        contacted.removeAll()
+        await pool.retryPending()
+        XCTAssertEqual(contacted, [remote.id])
+        grantReads = 0
+        await pool.synchronize()
+        XCTAssertEqual(grantReads, 1, "Renew one account once even when several devices use it")
     }
 
     @MainActor func testRemoteSelectedAccountCannotBeDisconnectedAndPreviewNeverContactsCodex() async throws {

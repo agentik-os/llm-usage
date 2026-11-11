@@ -44,12 +44,28 @@ struct CodexTokenUsage: Codable, Equatable {
 
 extension Account {
     var isCodex: Bool { connection == .codex }
+    var isClaude: Bool { connection == .claude }
+    /// Accounts whose limits come from the provider as live usage windows.
+    var hasLiveQuota: Bool { isCodex || isClaude }
+    var primaryWindow: CodexUsage.Window? { isClaude ? claudeUsage?.binding : codexUsage?.codex.primary }
+    var secondaryWindow: CodexUsage.Window? { isClaude ? claudeUsage?.other : codexUsage?.codex.secondary }
     var planLabel: String {
+        if isClaude {
+            let source = claudeConfigDir == nil ? "Claude Code" : "Claude"
+            guard let plan = planType, !plan.isEmpty else { return source }
+            return "\(plan) · \(source)"
+        }
         guard let plan = planType ?? codexUsage?.codex.planType, plan != "unknown" else { return "OpenAI · Codex" }
         return "\(plan.replacingOccurrences(of: "_", with: " ").capitalized) · Codex"
     }
+    /// Days left before a Claude sign-in must be renewed by signing in again, when that is soon.
+    var claudeSignInDaysLeft: Int? {
+        guard isClaude, let date = claudeSignInExpiresAt else { return nil }
+        let days = Int((date.timeIntervalSinceNow / 86400).rounded(.up))
+        return days <= 3 ? max(0, days) : nil
+    }
     var quotaFraction: Double? {
-        if isCodex { return codexUsage?.codex.primary.map { Double($0.remainingPercent) / 100 } }
+        if hasLiveQuota { return primaryWindow.map { Double($0.remainingPercent) / 100 } }
         return remainingFraction
     }
 }
