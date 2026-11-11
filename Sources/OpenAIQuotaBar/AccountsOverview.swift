@@ -36,6 +36,23 @@ struct AccountsOverview: View {
                         .buttonStyle(.plain).accessibilityLabel("Dismiss")
                 }.padding(12).softSurface(radius: 14).accessibilityIdentifier("claude-switch-error")
             }
+            if !store.showingDemo, store.rolloverNotice != nil || store.rolloverEvent != nil {
+                HStack(alignment: .top, spacing: 8) {
+                    Image(systemName: store.rolloverNotice == nil ? "arrow.triangle.2.circlepath" : "exclamationmark.circle").foregroundStyle(Palette.foreground)
+                    if let notice = store.rolloverNotice {
+                        Text(notice).fixedSize(horizontal: false, vertical: true)
+                    } else if let event = store.rolloverEvent {
+                        Text("Rolled over from \(event.from) to \(event.to) at \(event.date.formatted(date: .omitted, time: .shortened)).")
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    Spacer(minLength: 0)
+                    if store.rolloverNotice == nil {
+                        Button { store.rolloverEvent = nil } label: { Image(systemName: "xmark") }
+                            .buttonStyle(.plain).accessibilityLabel("Dismiss")
+                    }
+                }.font(.system(size: 10)).foregroundStyle(Palette.secondary).padding(12).softSurface(radius: 14)
+                    .accessibilityElement(children: .combine).accessibilityIdentifier("rollover-status")
+            }
             ScrollView {
                 VStack(spacing: 8) {
                     ForEach(store.visibleAccounts) { account in
@@ -44,6 +61,11 @@ struct AccountsOverview: View {
                             .contextMenu {
                                 Button("Rename account…") { store.startEditing(account) }.disabled(store.showingDemo)
                                 Button("Refresh usage") { Task { await store.refresh(account) } }.disabled(store.showingDemo)
+                                if account.isClaude, account.claudeConfigDir != nil, !store.showingDemo {
+                                    Button(account.inRollover == true ? "Remove from rollover" : "Add to rollover") {
+                                        try? store.setInRollover(account.id, account.inRollover != true)
+                                    }
+                                }
                                 if account.isClaude, account.claudeConfigDir != nil, !store.isClaudeCodeAccount(account) {
                                     Button("Use in Claude Code") { Task { await store.useInClaudeCode(account) } }.disabled(!store.canSwitchClaudeCode)
                                 }
@@ -94,6 +116,10 @@ struct AccountUsageRow: View {
                     ActiveAccountBadge(names: pool.activeDevices(for: account.id).map(\.name).joined(separator: ", "), compact: true)
                 } else if pool.isSelected(account.id) {
                     Label("Pending", systemImage: "clock").font(.system(size: 9)).foregroundStyle(Palette.secondary)
+                }
+                if account.inRollover == true, store.rollover.enabled, !store.showingDemo {
+                    Image(systemName: "arrow.triangle.2.circlepath").font(.system(size: 9, weight: .semibold)).foregroundStyle(Palette.secondary)
+                        .help("In automatic rollover").accessibilityLabel("In automatic rollover")
                 }
                 Spacer(minLength: 2)
                 if let fraction {

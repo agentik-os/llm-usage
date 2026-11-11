@@ -12,6 +12,7 @@ LLM Usage is a native Swift app with a monochrome interface, Liquid Glass on mac
 - Browser sign-in with a short device code, plus a browser callback fallback.
 - Claude subscription accounts (Pro/Max): 5-hour, weekly and per-model weekly limits, with reset times. Use this Mac’s Claude Code sign-in or add other Claude accounts.
 - **Use in Claude Code** moves Claude Code on this Mac to another connected Claude account. Terminals that are already open follow within about a minute, without a restart, and new terminals start on it.
+- **Claude rollover** moves Claude Code to another Claude account automatically when the one in use reaches 80, 90 or 95% of a limit. You choose which accounts it may use.
 - **Use a reset** for OpenAI accounts that have Codex rate-limit reset credits, after confirmation.
 - Multiple accounts together, with usage bars and reset dates in your local time zone.
 - Editable account names and System, Light or Dark appearance independent of macOS.
@@ -90,6 +91,19 @@ Limits:
 - Switching covers this Mac. Claude Code on connected VPS devices is not switched.
 - The open-terminal behavior was verified with Claude Code 2.1.322. It relies on how Claude Code reloads its sign-in, which Anthropic does not document and may change.
 - Do not run `CLAUDE_CONFIG_DIR=<private directory> claude` for the account Claude Code currently uses: two processes renewing the same sign-in from different places can sign one of them out.
+
+## Claude rollover
+
+Open **Settings → Claude rollover**, turn it on, pick the share used that triggers a move (80, 90 or 95%, default 95%), and switch on each account Claude Code may move to. Accounts you leave off are never used by rollover. You can also right-click an account in the list and choose **Add to rollover**. Rollover is off until you turn it on.
+
+When the account Claude Code uses reaches the threshold, LLM Usage switches Claude Code to the chosen account with the most usage left, exactly as **Use in Claude Code** does: open terminals follow within about a minute and new terminals start on it. The account list then shows which account it left and which it moved to.
+
+- **What counts**: the highest share used across the 5-hour limit, the weekly limit and the per-model weekly limits. An account is a valid destination only when every one of those is below the threshold, its usage was read without error in the last 15 minutes, and its sign-in has not expired. Usage is read again just before the move.
+- **Which account leaves**: any account Claude Code is using, whether or not it is switched on for rollover. The switches only decide where Claude Code may go.
+- **When nothing is available**: Claude Code stays where it is and the account list says so. It moves as soon as a chosen account has usage left again, for example after a reset.
+- **Timing**: the account in use is read about every two minutes while LLM Usage runs, the others every five. A burst that uses several percent within two minutes can pass the threshold before the move, and a request already in flight finishes on the previous account.
+
+The limits of **Use in Claude Code** apply here too. LLM Usage must be running for rollover to happen.
 
 ## Reset credits (OpenAI)
 
