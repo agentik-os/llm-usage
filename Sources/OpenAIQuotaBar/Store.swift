@@ -62,7 +62,7 @@ final class Store: ObservableObject {
     @Published var claudeConnect: ClaudeConnectState?
     @Published private(set) var claudeLocalAvailable = false
     private var claudeLogin: ClaudeLoginSession?
-    private var claudeReconnecting: Account?
+    @Published private(set) var claudeReconnecting: Account?
     /// The account Claude Code on this Mac is signed in to, confirmed by Claude for the sign-in in force.
     @Published private(set) var claudeCode: ClaudeCodeState?
     @Published private(set) var claudeSwitching: UUID?
@@ -84,7 +84,7 @@ final class Store: ObservableObject {
     private var loginTimeout: Task<Void, Never>?
     private var loginAttempt: UUID?
     private var loginID: String?
-    private var reconnecting: Account?
+    @Published private(set) var reconnecting: Account?
     private var pendingSignIn: PendingSignIn?
     private var activeClients: [UUID: CodexClient] = [:]
     private var disconnecting: Set<UUID> = []
@@ -133,6 +133,26 @@ final class Store: ObservableObject {
     var isPreview: Bool { ephemeral }
     var isSigningIn: Bool { signInState != nil }
     func startAdding() { beginSignIn() }
+    func reconnectAccount(_ account: Account) {
+        guard !showingDemo, claudeSwitching == nil, account.hasLiveQuota,
+              let current = accounts.first(where: { $0.id == account.id }) else { return }
+        openAccount(current)
+        if current.isClaude { startClaudeConnect(reconnect: current) }
+        else { beginSignIn(reconnect: current) }
+    }
+
+    /// Resolve the latest record after authentication so renames and rollover choices survive.
+    func accountForReconnect(_ original: Account?, authenticatedEmail: String?) throws -> Account? {
+        guard let original else { return nil }
+        guard let current = accounts.first(where: { $0.id == original.id && $0.provider == original.provider }) else {
+            throw UsageError.message("This account was removed. Cancel and connect it as a new account.")
+        }
+        if let expected = current.email, !expected.isEmpty,
+           !ClaudeSwitch.sameAccount(expected, authenticatedEmail) {
+            throw ReconnectIdentityMismatch(expectedEmail: expected)
+        }
+        return current
+    }
     func startEditing(_ account: Account) {
         guard !showingDemo else { return }
         editorReturnsToSettings = showingSettings
@@ -264,6 +284,7 @@ final class Store: ObservableObject {
     }
 
     func beginSignIn(browserFlow: Bool = false, reconnect account: Account? = nil) {
+        cancelClaudeConnect()
         cancelSignIn()
         showingEditor = false
         showingSettings = false
@@ -362,7 +383,8 @@ final class Store: ObservableObject {
         do {
             let details = try await signedInIdentity(sessionID: sessionID, attempt: attempt)
             guard loginAttempt == attempt else { return }
-            var account = accounts.first { $0.authSessionID == sessionID } ?? reconnecting
+            let reconnected = try accountForReconnect(reconnecting, authenticatedEmail: details.email)
+            var account = accounts.first { $0.authSessionID == sessionID } ?? reconnected
                 ?? Account(name: details.email?.components(separatedBy: "@").first ?? "OpenAI account", provider: .openai)
             let previousSession = account.authSessionID
             account.connection = .codex
@@ -381,7 +403,7 @@ final class Store: ObservableObject {
             accounts = updated
             selectedID = account.id
             showingDemo = false
-            showingAccountDetails = false
+            showingAccountDetails = reconnected != nil
             signInState = nil
             loginAttempt = nil
             loginClient = nil
@@ -634,7 +656,8 @@ final class Store: ObservableObject {
         if let duplicate = accounts.first(where: { $0.isClaude && $0.email != nil && $0.email == email && $0.id != claudeReconnecting?.id }) {
             throw UsageError.message("\(duplicate.name) already shows this Claude account.")
         }
-        var account = claudeReconnecting ?? Account(name: email?.components(separatedBy: "@").first ?? "Claude account", provider: .claude)
+        let reconnected = try accountForReconnect(claudeReconnecting, authenticatedEmail: email)
+        var account = reconnected ?? Account(name: email?.components(separatedBy: "@").first ?? "Claude account", provider: .claude)
         let previousDir = account.claudeConfigDir
         account.provider = .claude
         account.connection = .claude
@@ -659,7 +682,7 @@ final class Store: ObservableObject {
         }
         selectedID = account.id
         showingDemo = false
-        showingAccountDetails = false
+        showingAccountDetails = reconnected != nil
         claudeConnect = nil
         claudeReconnecting = nil
         onAccountConnected?()

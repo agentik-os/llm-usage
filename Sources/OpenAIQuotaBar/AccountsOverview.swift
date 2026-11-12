@@ -70,6 +70,7 @@ struct AccountsOverview: View {
                                 }
                                 Button("Rename account…") { store.startEditing(account) }.disabled(store.showingDemo)
                                 Button("Refresh usage") { Task { await store.refresh(account) } }.disabled(store.showingDemo)
+                                if account.hasLiveQuota { ReconnectAccountButton(account: account) }
                                 if account.isClaude, account.claudeConfigDir != nil, !store.showingDemo {
                                     Button(account.inRollover == true ? "Remove from rollover" : "Add to rollover") {
                                         try? store.setInRollover(account.id, account.inRollover != true)
@@ -140,6 +141,7 @@ struct AccountUsageRow: View {
                 if syncing { Text("Syncing…") }
                 else if account.error != nil { Label("Needs attention", systemImage: "exclamationmark.circle") }
                 else if let days = account.claudeSignInDaysLeft { Label(days == 0 ? "Sign in again" : "Sign in again in \(days)d", systemImage: "clock.badge.exclamationmark") }
+                else if let model = account.exhaustedModelLimit() { Label("\(model) limit reached", systemImage: "exclamationmark.circle").accessibilityIdentifier("model-limit-reached") }
                 else { Text(window) }
                 Spacer(minLength: 2)
                 Text(tokens).lineLimit(1).minimumScaleFactor(0.85)

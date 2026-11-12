@@ -69,6 +69,12 @@ extension Account {
         let days = Int((date.timeIntervalSinceNow / 86400).rounded(.up))
         return days <= 3 ? max(0, days) : nil
     }
+    /// A per-model weekly limit that is used up, e.g. "Fable". Claude refuses that model
+    /// even while the account's overall weekly limit still has room.
+    func exhaustedModelLimit(now: Date = Date()) -> String? {
+        guard isClaude else { return nil }
+        return claudeUsage?.scoped.first { $0.window.usedPercent >= 100 && ($0.window.resetDate.map { $0 > now } ?? true) }?.name
+    }
     var quotaFraction: Double? {
         if hasLiveQuota { return primaryWindow.map { Double($0.remainingPercent) / 100 } }
         return remainingFraction

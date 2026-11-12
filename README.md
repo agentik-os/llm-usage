@@ -15,6 +15,8 @@ LLM Usage is a native Swift app with a monochrome interface, Liquid Glass on mac
 - **Claude rollover** moves Claude Code to another Claude account automatically when the one in use reaches 80, 90 or 95% of a limit. You choose which accounts it may use.
 - **Use a reset** for OpenAI accounts that have Codex rate-limit reset credits, after confirmation.
 - Multiple accounts together, with usage bars and reset dates in your local time zone.
+- **Reconnect account** on each account’s page, in its settings and in the right-click menu signs the account in again without removing it. Its name, rollover choice and other settings are kept, and signing in with a different account is refused instead of replacing the saved one.
+- A Claude account whose per-model weekly limit is used up is marked in the list, e.g. **Fable limit reached**, even when its overall weekly limit still has room.
 - Each account’s sign-in email is shown on its page, in Settings and in the account menu; right-click an account to copy it.
 - Editable account names and System, Light or Dark appearance independent of macOS.
 - A **Ready for new requests** badge requires an independent account read-back, a successful OpenAI usage request and a running Codex version with the account-switch fix. Accepting a token alone never completes the switch.
@@ -69,7 +71,7 @@ The home screen shows each Claude account’s most limiting window, either the 5
 
 Limits:
 
-- Claude fixes a sign-in’s lifetime at about 30 days when you sign in, and renewals do not extend it. LLM Usage keeps the account connected until then and warns three days before you need to sign in again.
+- Claude fixes a sign-in’s lifetime at about 30 days when you sign in, and renewals do not extend it. LLM Usage keeps the account connected until then and warns three days before you need to sign in again. Use **Reconnect account** to sign in again at any time; cancelling leaves the saved sign-in as it was.
 - Claude account switching covers Claude Code on this Mac. Connected devices, Hermes and reset credits apply to OpenAI accounts.
 - Gemini is not supported yet.
 
