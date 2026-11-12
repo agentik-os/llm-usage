@@ -150,6 +150,11 @@ struct ContentView: View {
                     .padding(.horizontal, 11).padding(.vertical, 8).background(Palette.foreground.opacity(0.12), in: Capsule())
             }
             accountSelector(account)
+            if account.hasLiveQuota, !store.showingDemo {
+                ReconnectAccountButton(account: account)
+                    .buttonStyle(.plain).font(.system(size: 11, weight: .medium)).foregroundStyle(Palette.foreground)
+                    .padding(.vertical, 6).frame(maxWidth: .infinity, alignment: .leading)
+            }
             if account.hasLiveQuota { CodexUsageCard(account: account) }
             else { usageCard(account); resetDetails(account) }
             if account.isCodex, !store.showingDemo { AccountSwitchButton(account: account) }
@@ -160,11 +165,9 @@ struct ContentView: View {
                     Text(days == 0 ? "Claude needs you to sign in again." : "Claude asks for a new sign-in in \(days) day\(days == 1 ? "" : "s").")
                         .font(.system(size: 10)).foregroundStyle(Palette.secondary).fixedSize(horizontal: false, vertical: true)
                     Spacer(minLength: 0)
-                    if account.claudeConfigDir != nil {
-                        Button("Sign in") { store.startClaudeConnect(reconnect: account) }.buttonStyle(.plain).font(.system(size: 10, weight: .semibold))
-                    } else {
-                        Text("Run claude to renew").font(.system(size: 10)).foregroundStyle(Palette.secondary)
-                    }
+                    Button("Reconnect") { store.reconnectAccount(account) }
+                        .buttonStyle(.plain).font(.system(size: 10, weight: .semibold))
+                        .disabled(store.claudeSwitching != nil)
                 }.padding(12).softSurface(radius: 14).accessibilityIdentifier("claude-signin-expiry")
             }
             if let error = account.error {

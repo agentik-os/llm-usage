@@ -140,12 +140,8 @@ struct ConnectedAccountView: View {
             if let error { Text(error).font(.caption).foregroundStyle(Palette.foreground).padding(.bottom, 15) }
             Button(action: saveName) { Label("Save name", systemImage: "checkmark") }
                 .buttonStyle(PrimaryButtonStyle()).disabled(!validName || removing).accessibilityIdentifier("save-account-name")
-            if account.isClaude && account.claudeConfigDir == nil {
-                Text("Uses this Mac’s Claude Code sign-in.").font(.system(size: 11)).foregroundStyle(Palette.secondary).padding(.top, 18)
-            } else {
-                Button { if account.isClaude { store.startClaudeConnect(reconnect: account) } else { store.beginSignIn(reconnect: account) } } label: { Label("Sign in again", systemImage: "arrow.clockwise") }
-                    .buttonStyle(.plain).font(.system(size: 11)).padding(.top, 18).disabled(removing)
-            }
+            ReconnectAccountButton(account: account)
+                .buttonStyle(.plain).font(.system(size: 11)).padding(.top, 18).disabled(removing)
             Button(removing ? "Disconnecting…" : "Disconnect account") { confirming = true }
                 .buttonStyle(.plain).font(.system(size: 11)).foregroundStyle(Palette.secondary).padding(.top, 18).disabled(removing)
             Text("Your other accounts stay signed in.").font(.system(size: 10)).foregroundStyle(Palette.secondary).padding(.top, 24)
