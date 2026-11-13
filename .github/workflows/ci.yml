@@ -24,6 +24,12 @@ jobs:
         with:
           name: LLM-Usage-Connector
           path: dist/LLM-Usage-Connector.zip
+      - name: Archive app
+        run: /usr/bin/ditto -c -k --keepParent "dist/LLM Usage.app" dist/LLM-Usage.app.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: LLM-Usage-App
+          path: dist/LLM-Usage.app.zip
   connector:
     name: Python connector
     runs-on: ubuntu-24.04

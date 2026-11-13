@@ -17,6 +17,8 @@ struct ContentView: View {
                 SignInView()
             } else if store.claudeConnect != nil {
                 ClaudeConnectView()
+            } else if store.showingLocal {
+                LocalView(monitor: store.local)
             } else if store.showingSettings {
                 AppSettingsView()
             } else if store.showingEditor {
@@ -54,6 +56,7 @@ struct ContentView: View {
         .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: store.showingDemo)
         .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: store.isSigningIn)
         .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: store.showingSettings)
+        .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: store.showingLocal)
         .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: store.showingAccountDetails)
     }
 
@@ -91,6 +94,7 @@ struct ContentView: View {
                 Button("All accounts") { store.showHome() }
                 Button("Settings…") { store.showingSettings = true }
                 Button("Connected devices…") { pool.showingDevices = true }
+                Button("Local models and agents…") { store.showingLocal = true }
                 Button(store.showingDemo ? "Leave preview" : "Explore a preview") { store.showingDemo.toggle() }
                 Button("Close panel") { close() }.keyboardShortcut(.escape, modifiers: [])
                 Divider()
@@ -285,8 +289,11 @@ struct ContentView: View {
         HStack(spacing: 5) {
             Image(systemName: "lock.shield").font(.system(size: 9))
             Text(store.selectedAccount == nil ? "Private by design. Right in your menu bar." : store.selectedAccount?.isClaude == true ? "Live subscription usage · Secured with Claude" : store.selectedAccount?.isCodex == true ? "Live account usage · Secured with OpenAI" : "Organization API usage · Custom budget & reminders")
-                .font(.system(size: 9))
-            Spacer(minLength: 0)
+                .font(.system(size: 9)).lineLimit(1)
+            Spacer(minLength: 6)
+            Button { store.showingLocal = true } label: { Label("On this Mac", systemImage: "cpu").font(.system(size: 9, weight: .semibold)) }
+                .buttonStyle(.plain).foregroundStyle(Palette.foreground).fixedSize()
+                .help("Local models and running agents").accessibilityLabel("Local models and running agents").accessibilityIdentifier("local-models")
         }.foregroundStyle(Palette.secondary).padding(.horizontal, 24).padding(.vertical, 13)
             .overlay(alignment: .top) { Rectangle().fill(Color.primary.opacity(0.06)).frame(height: 0.5).padding(.horizontal, 24) }
     }

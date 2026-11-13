@@ -50,6 +50,9 @@ final class Store: ObservableObject {
     @Published var showingDemo = false { didSet { showingAccountDetails = false } }
     @Published var showingAccountDetails = false
     @Published var showingSettings = false
+    @Published var showingLocal = false
+    /// Owned here so a running speed measurement survives leaving the screen.
+    private(set) lazy var local = LocalMonitor(preview: ephemeral)
     @Published private(set) var theme: AppTheme = .system
     @Published var showingEditor = false
     @Published var editingAccount: Account?
@@ -162,7 +165,7 @@ final class Store: ObservableObject {
     }
     func closeEditor() { showingEditor = false; showingSettings = editorReturnsToSettings }
     func openAccount(_ account: Account) { selectedID = account.id; showingAccountDetails = true }
-    func showHome() { showingSettings = false; showingEditor = false; showingAccountDetails = false }
+    func showHome() { showingSettings = false; showingLocal = false; showingEditor = false; showingAccountDetails = false }
 
     private var settingsFile: URL { file.deletingLastPathComponent().appendingPathComponent("settings.json") }
     func setTheme(_ theme: AppTheme) throws {
