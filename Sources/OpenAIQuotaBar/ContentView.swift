@@ -18,7 +18,7 @@ struct ContentView: View {
             } else if store.claudeConnect != nil {
                 ClaudeConnectView()
             } else if store.showingLocal {
-                LocalView(preview: store.isPreview)
+                LocalView(monitor: store.local)
             } else if store.showingSettings {
                 AppSettingsView()
             } else if store.showingEditor {

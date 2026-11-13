@@ -51,6 +51,8 @@ final class Store: ObservableObject {
     @Published var showingAccountDetails = false
     @Published var showingSettings = false
     @Published var showingLocal = false
+    /// Owned here so a running speed measurement survives leaving the screen.
+    private(set) lazy var local = LocalMonitor(preview: ephemeral)
     @Published private(set) var theme: AppTheme = .system
     @Published var showingEditor = false
     @Published var editingAccount: Account?

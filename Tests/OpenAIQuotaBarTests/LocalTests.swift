@@ -56,6 +56,7 @@ final class LocalTests: XCTestCase {
         /bin/zsh /Users/someone/.local/bin/hermes-gateway-keepalive.sh
         /usr/bin/osascript -l JavaScript -e run /Users/someone/.hermes/tools/python/bin/python3 -m hermes_cli.main --profile default
         /opt/homebrew/bin/opencode
+        /opt/homebrew/bin/opencode serve --port 4096
         /usr/bin/grep claude
         """
         let counts = LocalParsing.agentCounts(processList: processes)
@@ -84,8 +85,10 @@ final class LocalTests: XCTestCase {
         try JSONEncoder().encode(saved).write(to: file)
         let monitor = LocalMonitor(server: URL(string: "http://127.0.0.1:1")!, speedsFile: file)
         XCTAssertEqual(monitor.speeds, saved)
+        monitor.error = "Couldn’t measure a:1b."
         await monitor.refresh()
         XCTAssertFalse(monitor.serverReachable)
         XCTAssertEqual(monitor.models, [])
+        XCTAssertEqual(monitor.error, "Couldn’t measure a:1b.", "Refreshing must keep the last measurement error visible")
     }
 }

@@ -3,9 +3,7 @@ import SwiftUI
 /// Local models installed on this Mac, their measured speed, and running agent sessions.
 struct LocalView: View {
     @EnvironmentObject private var store: Store
-    @StateObject private var monitor: LocalMonitor
-
-    init(preview: Bool) { _monitor = StateObject(wrappedValue: LocalMonitor(preview: preview)) }
+    @ObservedObject var monitor: LocalMonitor
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {

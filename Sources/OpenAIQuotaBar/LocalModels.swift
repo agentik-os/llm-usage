@@ -98,7 +98,7 @@ enum LocalParsing {
             return helper ? nil : .claudeCode
         }
         if name == "codex" { return arguments.first == "app-server" ? nil : .codex }
-        if name == "opencode" { return .openCode }
+        if name == "opencode" { return arguments.first == "serve" ? nil : .openCode }
         return nil
     }
 
@@ -160,7 +160,6 @@ final class LocalMonitor: ObservableObject {
             let running = try? await data("api/ps", timeout: 5)
             models = try LocalParsing.models(tags: tags, running: running)
             serverReachable = true
-            error = nil
         } catch {
             models = []
             serverReachable = false
@@ -172,6 +171,7 @@ final class LocalMonitor: ObservableObject {
     func measure(_ model: LocalModel) async {
         guard !preview, measuring == nil else { return }
         measuring = model.name
+        error = nil
         defer { measuring = nil }
         do {
             let body: [String: Any] = ["model": model.name, "prompt": "Write a short paragraph about the sea.",
