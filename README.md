@@ -18,6 +18,7 @@ LLM Usage is a native Swift app with a monochrome interface, Liquid Glass on mac
 - **Reconnect account** on each account’s page, in its settings and in the right-click menu signs the account in again without removing it. Its name, rollover choice and other settings are kept, and signing in with a different account is refused instead of replacing the saved one.
 - A Claude account whose per-model weekly limit is used up is marked in the list, e.g. **Fable limit reached**, even when its overall weekly limit still has room.
 - Each account’s sign-in email is shown on its page, in Settings and in the account menu; right-click an account to copy it.
+- **On this Mac** lists the local models installed in Ollama with their size and which are in memory, measures each model’s generation speed in tokens per second, and counts the Claude Code, Codex, Hermes and OpenCode sessions running on this Mac.
 - Editable account names and System, Light or Dark appearance independent of macOS.
 - A **Ready for new requests** badge requires an independent account read-back, a successful OpenAI usage request and a running Codex version with the account-switch fix. Accepting a token alone never completes the switch.
 - **Use this account** targets this Mac, all devices, one VPS, or a custom selection without closing conversations.
@@ -189,6 +190,20 @@ helper, so existing account connectors do not need restarting. Settings require
 Codex support for `model/list`, `config/read` and `config/batchWrite`; live updates
 add `thread/loaded/list`, `thread/read` and `thread/settings/update`. Preview mode
 uses in-memory sample settings and never contacts Codex.
+
+## Local models and running agents
+
+Choose **On this Mac** at the bottom of the panel, or **⋯ → Local models and agents…**.
+
+- **Running agents** counts the Claude Code, Codex, Hermes and OpenCode sessions on this Mac from the process list. Helper and daemon processes are not counted.
+- **Local models** reads the Ollama server on `127.0.0.1:11434`: every installed model with its parameter count, quantization and size on disk, and an **In memory** mark on the ones currently loaded.
+- **Measure speed** runs one short generation (96 tokens) with that model and shows the result in tokens per second. The last result is kept in `~/Library/Application Support/OpenAIQuotaBar/local-speeds.json`. Measuring loads the model into memory, so a large model can take a while and may unload another one.
+
+Limits:
+
+- Only Ollama on this Mac is read. Other local servers and models on connected devices are not listed.
+- The speed is one measurement on demand, not a live reading of requests made by your agents.
+- Embedding models are listed without a speed.
 
 ## Account privacy
 

@@ -75,6 +75,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             if arguments.contains("--detail"), let account = store.selectedAccount { store.openAccount(account) }
             if arguments.contains("--settings") { store.showingSettings = true }
             if arguments.contains("--devices") { store.pool.showingDevices = true }
+            if arguments.contains("--local") { store.showingLocal = true }
             if arguments.contains("--account-settings") {
                 let sample = Account.samples[0]
                 try? store.saveAccount(sample, key: "")
@@ -162,6 +163,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     if self.store.pool.showingDevices { self.store.pool.showingDevices = false }
                     else if self.store.isSigningIn { self.store.cancelSignIn() }
                     else if self.store.showingEditor { self.store.closeEditor() }
+                    else if self.store.showingLocal { self.store.showingLocal = false }
                     else if self.store.showingSettings { self.store.showingSettings = false }
                     else if self.store.showingAccountDetails { self.store.showHome() }
                     else { self.hidePanel() }
