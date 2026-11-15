@@ -132,6 +132,7 @@ struct AccountUsageRow: View {
                         .help("In automatic rollover").accessibilityLabel("In automatic rollover")
                 }
                 Spacer(minLength: 2)
+                if account.needsReconnect, !store.showingDemo { ReconnectNowButton(account: account, compact: true) }
                 if let fraction {
                     Text("\(Int((fraction * 100).rounded()))% used").font(.system(size: 11, weight: .semibold)).monospacedDigit()
                 } else { Text("—").font(.system(size: 13)).foregroundStyle(Palette.secondary) }
@@ -139,6 +140,7 @@ struct AccountUsageRow: View {
             }
             HStack(spacing: 6) {
                 if syncing { Text("Syncing…") }
+                else if account.needsReconnect { Label("Sign in again", systemImage: "exclamationmark.circle").accessibilityIdentifier("needs-reconnect") }
                 else if account.error != nil { Label("Needs attention", systemImage: "exclamationmark.circle") }
                 else if let days = account.claudeSignInDaysLeft { Label(days == 0 ? "Sign in again" : "Sign in again in \(days)d", systemImage: "clock.badge.exclamationmark") }
                 else if let model = account.exhaustedModelLimit() { Label("\(model) limit reached", systemImage: "exclamationmark.circle").accessibilityIdentifier("model-limit-reached") }

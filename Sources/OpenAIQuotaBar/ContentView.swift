@@ -174,6 +174,7 @@ struct ContentView: View {
                 HStack(alignment: .top, spacing: 8) {
                     Image(systemName: "exclamationmark.circle").foregroundStyle(Palette.foreground)
                     Text(error).font(.system(size: 10)).foregroundStyle(Palette.secondary).fixedSize(horizontal: false, vertical: true)
+                    if account.needsReconnect, !store.showingDemo { Spacer(minLength: 0); ReconnectNowButton(account: account) }
                     Button { store.startEditing(account) } label: { Image(systemName: "slider.horizontal.3") }
                         .buttonStyle(.plain).help("Edit account settings").accessibilityLabel("Edit account settings")
                 }.padding(12).softSurface(radius: 14)
