@@ -441,3 +441,27 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+class ExecutableDiscoveryTests(unittest.TestCase):
+    def test_finder_environment_finds_npm_codex_and_node(self):
+        with tempfile.TemporaryDirectory() as temp:
+            home = Path(temp)
+            bin_dir = home / '.local/node/bin'
+            bin_dir.mkdir(parents=True)
+            (bin_dir / 'codex').write_text('#!/usr/bin/env node\n')
+            (bin_dir / 'node').write_text('#!/bin/sh\nprintf launcher-ok\n')
+            for name in ('codex', 'node'):
+                (bin_dir / name).chmod(0o700)
+            with patch.object(Path, 'home', return_value=home), patch.dict(os.environ, {'PATH': '/usr/bin:/bin'}):
+                codex = peer.find_codex()
+                self.assertEqual(codex, str(bin_dir / 'codex'))
+                result = peer.subprocess.run([codex, '--version'], env=peer.cli_environment(codex), capture_output=True)
+                self.assertEqual(result.returncode, 0)
+                self.assertEqual(result.stdout, b'launcher-ok')
+
+    def test_cli_path_drops_relative_and_empty_directories(self):
+        with patch.dict(os.environ, {'PATH': ':relative:/usr/bin:'}):
+            paths = peer.cli_environment()['PATH'].split(os.pathsep)
+            self.assertNotIn('', paths)
+            self.assertNotIn('relative', paths)
+            self.assertEqual(len(paths), len(set(paths)))

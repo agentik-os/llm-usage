@@ -273,87 +273,115 @@ final class ClaudeLoginSession: @unchecked Sendable {
     private var urlContinuation: CheckedContinuation<URL, Error>?
     private var exitContinuation: CheckedContinuation<Int32, Never>?
     private var exitStatus: Int32?
+    private var cancelled = false
 
-    static func executable() -> String? {
-        let home = FileManager.default.homeDirectoryForCurrentUser.path
-        return ["\(home)/.local/bin/claude", "/opt/homebrew/bin/claude", "/usr/local/bin/claude", "\(home)/.claude/local/claude"]
-            .first { FileManager.default.isExecutableFile(atPath: $0) }
+    static func executable() -> String? { CLIEnvironment.executable("claude")?.path }
+
+    static func environment(configDir: String, inherited: [String: String] = ProcessInfo.processInfo.environment) -> [String: String] {
+        var environment = CLIEnvironment.environment(inherited: inherited)
+        for key in ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_BASE_URL",
+                    "CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX", "CLAUDE_CODE_USE_FOUNDRY", "CLAUDE_CONFIG_DIR"] {
+            environment.removeValue(forKey: key)
+        }
+        environment["CLAUDE_CONFIG_DIR"] = configDir
+        environment["BROWSER"] = "/usr/bin/true"
+        return environment
     }
 
-    init(executable: String, configDir: String) {
+    init(executable: String, configDir: String, prefixArguments: [String] = []) {
         self.configDir = configDir
         process.executableURL = URL(fileURLWithPath: executable)
-        process.arguments = ["auth", "login", "--claudeai"]
-        var environment = ProcessInfo.processInfo.environment
-        environment["CLAUDE_CONFIG_DIR"] = configDir
-        environment["BROWSER"] = "/usr/bin/true" // LLM Usage opens the link itself.
-        process.environment = environment
+        process.arguments = prefixArguments + ["auth", "login", "--claudeai"]
+        process.environment = CLIEnvironment.environment(inherited: Self.environment(configDir: configDir), executable: process.executableURL)
         process.standardInput = input
         process.standardOutput = output
         process.standardError = output
     }
 
-    /// Starts the login and returns the authorization link Claude Code printed.
+    /// Wait for a complete URL: a pipe can split the OAuth state or PKCE challenge anywhere.
+    static func authorizationURL(in output: String) -> URL? {
+        let clean = output.replacingOccurrences(of: #"\x1B\[[0-?]*[ -/]*[@-~]"#, with: "", options: .regularExpression)
+        let pattern = #"https://[^\s]+/oauth/authorize\?[^\s]+(?=\s)"#
+        guard let range = clean.range(of: pattern, options: .regularExpression),
+              let url = URL(string: String(clean[range])), let components = URLComponents(url: url, resolvingAgainstBaseURL: false),
+              ["claude.ai", "claude.com", "platform.claude.com", "console.anthropic.com"].contains(url.host?.lowercased() ?? ""),
+              url.user == nil, url.password == nil,
+              components.queryItems?.contains(where: { $0.name == "state" && !($0.value ?? "").isEmpty }) == true else { return nil }
+        return url
+    }
+
     func start() async throws -> URL {
         try FileManager.default.createDirectory(atPath: configDir, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
         process.terminationHandler = { [weak self] process in
-            guard let self else { return }
-            self.lock.lock()
-            self.exitStatus = process.terminationStatus
-            let waiting = self.exitContinuation; self.exitContinuation = nil
-            let pending = self.urlContinuation; self.urlContinuation = nil
-            self.lock.unlock()
-            waiting?.resume(returning: process.terminationStatus)
-            pending?.resume(throwing: UsageError.message("Claude Code stopped before showing a sign-in link."))
+            self?.finish(status: process.terminationStatus)
         }
         return try await withCheckedThrowingContinuation { continuation in
-            lock.lock(); urlContinuation = continuation; lock.unlock()
+            lock.lock()
+            if cancelled { lock.unlock(); continuation.resume(throwing: CancellationError()); return }
+            urlContinuation = continuation
+            lock.unlock()
             output.fileHandleForReading.readabilityHandler = { [weak self] handle in
                 let chunk = handle.availableData
                 guard let self, !chunk.isEmpty else { handle.readabilityHandler = nil; return }
                 self.lock.lock()
                 self.buffer += String(decoding: chunk, as: UTF8.self)
-                var found: URL?
-                if self.urlContinuation != nil,
-                   let range = self.buffer.range(of: #"https://\S+/oauth/authorize\?\S+"#, options: .regularExpression) {
-                    found = URL(string: String(self.buffer[range]))
-                }
+                let found = Self.authorizationURL(in: self.buffer)
                 let pending = found == nil ? nil : self.urlContinuation
                 if found != nil { self.urlContinuation = nil }
+                // Never retain unlimited process output (which may contain credentials).
+                if self.buffer.utf8.count > 131_072 { self.buffer = String(self.buffer.suffix(65_536)) }
                 self.lock.unlock()
                 if let found { pending?.resume(returning: found) }
             }
             do { try process.run() }
-            catch {
-                lock.lock(); let pending = urlContinuation; urlContinuation = nil; lock.unlock()
-                pending?.resume(throwing: UsageError.message("Claude Code couldn’t be started."))
-            }
+            catch { finish(status: -1) }
             DispatchQueue.global().asyncAfter(deadline: .now() + 30) { [weak self] in
                 guard let self else { return }
                 self.lock.lock(); let pending = self.urlContinuation; self.urlContinuation = nil; self.lock.unlock()
-                if pending != nil { self.cancel() }
-                pending?.resume(throwing: UsageError.message("Claude Code didn’t show a sign-in link. Try again."))
+                if let pending {
+                    self.cancel()
+                    pending.resume(throwing: UsageError.message("Claude Code didn’t show a sign-in link. Try again."))
+                }
             }
         }
     }
 
-    /// Sends the pasted code and waits for Claude Code to save the sign-in.
-    func submit(code: String) async throws {
-        let trimmed = code.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty, !trimmed.contains(where: \.isNewline) else { throw UsageError.message("Paste the code shown by Claude.") }
-        try input.fileHandleForWriting.write(contentsOf: Data((trimmed + "\n").utf8))
+    /// Browser callback and pasted-code flows share the same completion observer.
+    func waitForCompletion() async throws {
         let status: Int32 = await withCheckedContinuation { continuation in
             lock.lock()
             if let exitStatus { lock.unlock(); continuation.resume(returning: exitStatus); return }
             exitContinuation = continuation
             lock.unlock()
-            DispatchQueue.global().asyncAfter(deadline: .now() + 60) { [weak self] in self?.cancel() }
+            DispatchQueue.global().asyncAfter(deadline: .now() + 15 * 60) { [weak self] in self?.cancel() }
         }
-        guard status == 0 else { throw UsageError.message("Claude didn’t accept this code. Start again for a fresh link.") }
+        guard status == 0 else { throw UsageError.message("Claude sign-in wasn’t completed. Try again for a fresh link.") }
+    }
+
+    func submit(code: String) throws {
+        let trimmed = code.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, !trimmed.contains(where: \.isNewline) else { throw UsageError.message("Paste the code shown by Claude.") }
+        lock.lock(); let ended = exitStatus != nil || cancelled; lock.unlock()
+        guard !ended else { throw UsageError.message("This sign-in has ended. Start again for a fresh link.") }
+        try input.fileHandleForWriting.write(contentsOf: Data((trimmed + "\n").utf8))
+    }
+
+    private func finish(status: Int32) {
+        lock.lock()
+        exitStatus = status
+        let waiting = exitContinuation; exitContinuation = nil
+        let pending = urlContinuation; urlContinuation = nil
+        buffer = ""
+        lock.unlock()
+        waiting?.resume(returning: status)
+        pending?.resume(throwing: UsageError.message("Claude Code stopped before showing a sign-in link."))
     }
 
     func cancel() {
+        lock.lock(); cancelled = true; lock.unlock()
         output.fileHandleForReading.readabilityHandler = nil
+        finish(status: -1)
+        try? input.fileHandleForWriting.close()
         if process.isRunning { process.terminate() }
     }
 }

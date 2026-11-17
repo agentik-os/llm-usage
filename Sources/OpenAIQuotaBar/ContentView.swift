@@ -13,10 +13,14 @@ struct ContentView: View {
         VStack(spacing: 0) {
             if pool.showingDevices {
                 DevicesView()
+            } else if store.showingRemote {
+                RemoteMachinesView(monitor: store.remoteMonitor)
             } else if store.isSigningIn {
                 SignInView()
             } else if store.claudeConnect != nil {
                 ClaudeConnectView()
+            } else if store.showingLocal {
+                LocalView(monitor: store.local)
             } else if store.showingSettings {
                 AppSettingsView()
             } else if store.showingEditor {
@@ -54,6 +58,7 @@ struct ContentView: View {
         .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: store.showingDemo)
         .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: store.isSigningIn)
         .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: store.showingSettings)
+        .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: store.showingLocal)
         .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: store.showingAccountDetails)
     }
 
@@ -73,6 +78,7 @@ struct ContentView: View {
             }
             Spacer()
             Menu {
+                Button("Use this Mac’s Codex") { store.useLocalCodex() }
                 Button("OpenAI account…") { store.startAdding() }
                 Button("Claude account…") { store.startClaudeConnect() }
             } label: {
@@ -91,6 +97,8 @@ struct ContentView: View {
                 Button("All accounts") { store.showHome() }
                 Button("Settings…") { store.showingSettings = true }
                 Button("Connected devices…") { pool.showingDevices = true }
+                Button("Monitor other machines…") { store.showingRemote = true }
+                Button("Local models and agents…") { store.showingLocal = true }
                 Button(store.showingDemo ? "Leave preview" : "Explore a preview") { store.showingDemo.toggle() }
                 Button("Close panel") { close() }.keyboardShortcut(.escape, modifiers: [])
                 Divider()
@@ -130,6 +138,9 @@ struct ContentView: View {
             Button { store.startAdding() } label: {
                 HStack(spacing: 8) { Image(systemName: "person.crop.circle"); Text("Sign in with OpenAI"); Image(systemName: "arrow.up.right").font(.system(size: 11, weight: .semibold)) }
             }.buttonStyle(PrimaryButtonStyle()).accessibilityIdentifier("sign-in").accessibilityLabel("Sign in with OpenAI")
+            Button("Use this Mac’s Codex") { store.useLocalCodex() }
+                .buttonStyle(.plain).font(.system(size: 11, weight: .medium)).padding(.top, 12)
+                .accessibilityIdentifier("codex-use-local")
             Button { store.startClaudeConnect() } label: {
                 HStack(spacing: 8) { Image(systemName: Provider.claude.icon); Text("Connect Claude") }.font(.system(size: 12, weight: .semibold)).padding(.vertical, 10)
             }.buttonStyle(.plain).foregroundStyle(Palette.foreground).padding(.top, 6).accessibilityIdentifier("connect-claude")
@@ -174,6 +185,7 @@ struct ContentView: View {
                 HStack(alignment: .top, spacing: 8) {
                     Image(systemName: "exclamationmark.circle").foregroundStyle(Palette.foreground)
                     Text(error).font(.system(size: 10)).foregroundStyle(Palette.secondary).fixedSize(horizontal: false, vertical: true)
+                    if account.needsReconnect, !store.showingDemo { Spacer(minLength: 0); ReconnectNowButton(account: account) }
                     Button { store.startEditing(account) } label: { Image(systemName: "slider.horizontal.3") }
                         .buttonStyle(.plain).help("Edit account settings").accessibilityLabel("Edit account settings")
                 }.padding(12).softSurface(radius: 14)
@@ -210,7 +222,8 @@ struct ContentView: View {
                     }
                 }
                 Divider()
-                Button("Connect another account…") { store.startAdding() }
+                Button("Connect OpenAI account…") { store.startAdding() }
+                Button("Connect Claude account…") { store.startClaudeConnect() }
             } label: {
                 VStack(alignment: .leading, spacing: 3) {
                     HStack(spacing: 6) {
@@ -285,8 +298,11 @@ struct ContentView: View {
         HStack(spacing: 5) {
             Image(systemName: "lock.shield").font(.system(size: 9))
             Text(store.selectedAccount == nil ? "Private by design. Right in your menu bar." : store.selectedAccount?.isClaude == true ? "Live subscription usage · Secured with Claude" : store.selectedAccount?.isCodex == true ? "Live account usage · Secured with OpenAI" : "Organization API usage · Custom budget & reminders")
-                .font(.system(size: 9))
-            Spacer(minLength: 0)
+                .font(.system(size: 9)).lineLimit(1)
+            Spacer(minLength: 6)
+            Button { store.showingLocal = true } label: { Label("On this Mac", systemImage: "cpu").font(.system(size: 9, weight: .semibold)) }
+                .buttonStyle(.plain).foregroundStyle(Palette.foreground).fixedSize()
+                .help("Local models and running agents").accessibilityLabel("Local models and running agents").accessibilityIdentifier("local-models")
         }.foregroundStyle(Palette.secondary).padding(.horizontal, 24).padding(.vertical, 13)
             .overlay(alignment: .top) { Rectangle().fill(Color.primary.opacity(0.06)).frame(height: 0.5).padding(.horizontal, 24) }
     }

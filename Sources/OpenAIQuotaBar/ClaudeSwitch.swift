@@ -100,6 +100,7 @@ enum ClaudeSwitch {
             Thread.sleep(forTimeInterval: 0.1)
         }
         defer { if locked { try? FileManager.default.removeItem(at: lock) } }
+        guard locked else { throw UsageError.message("Claude Code is updating its settings. Try switching again in a moment.") }
         guard let data = try? Data(contentsOf: file),
               var config = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
             throw UsageError.message("Claude Code’s settings file couldn’t be read.")

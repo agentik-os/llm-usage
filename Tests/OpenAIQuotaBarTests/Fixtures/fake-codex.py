@@ -46,6 +46,9 @@ for line in sys.stdin:
             counter.write_text(str(reads))
             if reads <= 2: account = None
         result = {'account': account, 'requiresOpenaiAuth': True}
+    elif method == 'account/logout':
+        Path('logout-called').write_text('yes')
+        result = {}
     elif method == 'account/login/start': result = {'type': 'chatgptDeviceCode', 'loginId': 'test-login', 'verificationUrl': 'https://auth.openai.com/codex/device', 'userCode': 'TEST-CODE'}
     elif method == 'account/rateLimitResetCredit/consume':
         Path('reset-consume-requests.json').write_text(json.dumps(message.get('params')))

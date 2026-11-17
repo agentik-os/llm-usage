@@ -128,6 +128,7 @@ enum PoolProcess {
             DispatchQueue.global(qos: .userInitiated).async {
                 let process = Process(), output = Pipe(), stdin = Pipe()
                 process.executableURL = URL(fileURLWithPath: executable)
+                process.environment = CLIEnvironment.environment(executable: process.executableURL)
                 process.arguments = arguments
                 process.standardOutput = output
                 process.standardError = FileHandle.nullDevice
@@ -237,6 +238,10 @@ final class AccountPool: ObservableObject {
             else {
                 guard let grantProvider else { throw UsageError.message("Account connection unavailable.") }
                 grant = try await grantProvider(account.id, selection)
+                if targets.contains(where: \.isLocal), connections[PoolDevice.local.id]?.reachable == false {
+                    _ = try decode(await command(.local, "install", timeout: 45))
+                    try await Task.sleep(nanoseconds: 700_000_000)
+                }
             }
             var choices = selections
             for device in targets { choices[device.id] = DeviceSelection(accountID: account.id, selectionID: selection) }
@@ -279,7 +284,9 @@ final class AccountPool: ObservableObject {
               let choice = selections[device.id],
               check.accountID == choice.accountID.uuidString, check.selectionID == choice.selectionID,
               Date().timeIntervalSince1970 - check.checkedAt < 90 else { return false }
-        return check.ready && !check.needsTerminalReconnect
+        // This badge certifies the shared connection. Independent terminals have
+        // their own warning and must not turn a verified connection into a failure.
+        return check.ready
     }
 
     func isConnectionSelected(_ device: PoolDevice) -> Bool {
@@ -504,7 +511,7 @@ final class AccountPool: ObservableObject {
         do {
             _ = try decode(await command(.local, "install", timeout: 45))
             try? await Task.sleep(nanoseconds: 700_000_000)
-            await update(.local, grant: nil)
+            await refreshDevice(.local)
         } catch { self.error = "Couldn’t install the Mac connector. Check that Codex is installed." }
     }
 
@@ -527,7 +534,8 @@ final class AccountPool: ObservableObject {
         if status.state == "expired" { return "Account expired · open LLM Usage" }
         if status.state == "attention" { return "Needs attention" }
         if isConfirmed(device) {
-            return "\(status.name ?? "Selected account") · ready for new requests"
+            if connection.verification?.needsTerminalReconnect == true { return "Shared Codex ready · other terminals remain" }
+            return "\(status.name ?? "Selected account") · shared Codex ready"
         }
         if let check = connection.verification {
             if !check.credentialConfirmed { return "Account not confirmed · retry" }

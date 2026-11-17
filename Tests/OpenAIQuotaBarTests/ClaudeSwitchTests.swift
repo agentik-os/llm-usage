@@ -92,10 +92,20 @@ final class ClaudeSwitchTests: XCTestCase {
         var other = Account(name: "Other", provider: .claude); other.connection = .claude
         other.claudeConfigDir = "/tmp/other"; other.email = "other@example.com"
         var codex = Account(name: "Codex", provider: .openai); codex.connection = .codex; codex.email = "other@example.com"
-        XCTAssertTrue(store.isClaudeCodeAccount(local), "an account read from this Mac's Claude Code is that sign-in")
+        XCTAssertFalse(store.isClaudeCodeAccount(local), "a local source is not proof of the current identity after a login change")
         XCTAssertFalse(store.isClaudeCodeAccount(other), "nothing is marked before Claude confirmed the sign-in")
         XCTAssertFalse(store.isClaudeCodeAccount(codex))
         XCTAssertFalse(store.canSwitchClaudeCode, "the preview never touches Claude Code")
+    }
+
+    func testBusySettingsLockNeverOverwritesAnotherWritersFile() throws {
+        let target = try writeConfig(["oauthAccount": ["emailAddress": "old@example.com"]])
+        let before = try Data(contentsOf: target.configFile)
+        let lock = URL(fileURLWithPath: target.configFile.path + ".lock")
+        try FileManager.default.createDirectory(at: lock, withIntermediateDirectories: false)
+        XCTAssertThrowsError(try ClaudeSwitch.writeAccountInfo(["emailAddress": "new@example.com"], target: target))
+        XCTAssertEqual(try Data(contentsOf: target.configFile), before)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: lock.path))
     }
 }
 

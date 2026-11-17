@@ -91,6 +91,9 @@ struct AccountsOverview: View {
                     Label(pool.selections.isEmpty ? "Connect your devices" : "\(pool.confirmedCount) of \(pool.selectedCount) selected devices ready", systemImage: "desktopcomputer")
                         .font(.system(size: 10)).foregroundStyle(Palette.secondary)
                 }.buttonStyle(.plain).accessibilityIdentifier("home-devices")
+                Button { store.showingRemote = true } label: {
+                    Label("Other machines", systemImage: "network").font(.system(size: 10)).foregroundStyle(Palette.secondary)
+                }.buttonStyle(.plain).accessibilityIdentifier("remote-machines")
             }
         }.padding(.horizontal, 24).padding(.bottom, 16).frame(maxHeight: .infinity)
     }
@@ -132,13 +135,17 @@ struct AccountUsageRow: View {
                         .help("In automatic rollover").accessibilityLabel("In automatic rollover")
                 }
                 Spacer(minLength: 2)
+                if account.needsReconnect, !store.showingDemo { ReconnectNowButton(account: account, compact: true) }
                 if let fraction {
                     Text("\(Int((fraction * 100).rounded()))% used").font(.system(size: 11, weight: .semibold)).monospacedDigit()
                 } else { Text("—").font(.system(size: 13)).foregroundStyle(Palette.secondary) }
                 Image(systemName: "chevron.right").font(.system(size: 8, weight: .semibold)).foregroundStyle(Palette.secondary)
             }
             HStack(spacing: 6) {
+                Text(account.provider.rawValue)
+                Text("·")
                 if syncing { Text("Syncing…") }
+                else if account.needsReconnect { Label("Sign in again", systemImage: "exclamationmark.circle").accessibilityIdentifier("needs-reconnect") }
                 else if account.error != nil { Label("Needs attention", systemImage: "exclamationmark.circle") }
                 else if let days = account.claudeSignInDaysLeft { Label(days == 0 ? "Sign in again" : "Sign in again in \(days)d", systemImage: "clock.badge.exclamationmark") }
                 else if let model = account.exhaustedModelLimit() { Label("\(model) limit reached", systemImage: "exclamationmark.circle").accessibilityIdentifier("model-limit-reached") }

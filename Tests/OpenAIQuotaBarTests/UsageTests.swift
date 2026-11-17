@@ -48,13 +48,13 @@ final class UsageTests: XCTestCase {
 final class AccountEmailTests: XCTestCase {
     func testMenuTitleShowsTheEmailOnlyWhenItAddsInformation() {
         var account = Account(name: "Work", provider: .claude)
-        XCTAssertEqual(account.menuTitle, "Work")
+        XCTAssertEqual(account.menuTitle, "Work · Claude Code")
         account.email = "work@example.com"
-        XCTAssertEqual(account.menuTitle, "Work · work@example.com")
+        XCTAssertEqual(account.menuTitle, "Work · Claude Code · work@example.com")
         account.name = "work@example.com"
-        XCTAssertEqual(account.menuTitle, "work@example.com")
+        XCTAssertEqual(account.menuTitle, "work@example.com · Claude Code")
         account.email = ""
-        XCTAssertEqual(account.menuTitle, "work@example.com")
+        XCTAssertEqual(account.menuTitle, "work@example.com · Claude Code")
     }
 }
 

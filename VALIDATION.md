@@ -1,0 +1,29 @@
+# Connection repair and read-only machine monitoring — 4.9.0
+
+## Reproduced failures and corrections
+
+- Finder-launched builds could not find Codex installed under `~/.local/node/bin`; npm launchers also failed because Node was absent from the GUI environment. The app and connector now use an explicit tool search path without executing shell startup scripts.
+- Claude login only observed completion after a pasted code. Browser callbacks now finish automatically, fragmented authorization URLs are accumulated safely, and inherited provider overrides are removed from private login processes.
+- A cancelled Claude connection could complete later and add a stale account. Attempt guards prevent late replies from changing state after cancellation or another provider is selected.
+- Local Claude accounts could retain an “in use” label after the CLI changed identity. Identity confirmation is required, and a renewal cannot overwrite a different account selected in the meantime. A busy Claude settings lock is respected.
+- Added an explicit connection to the existing local ChatGPT/Codex session. Credentials remain managed by Codex; removing this monitor does not log out the CLI. Account changes are detected before reading usage or handing out grants.
+- First local activation can install the connector; reconnecting it reapplies pending selection. A verified shared connection is labeled **Shared Codex ready**, with separate-terminal limitations displayed independently.
+- Provider names distinguish identically named accounts. Existing local-model features and reconnect affordances are retained.
+- Added a separate monitoring-only machine list: bounded SSH reads of session-token aggregates, running agents and Ollama models. These hosts never enter account sharing or switching targets.
+
+## Validation
+
+- Swift: 87 tests, zero failures, 5 opt-in live tests skipped in the default suite.
+- Python: 41 tests, zero failures, 1 optional environment-dependent test skipped.
+- Real installed Codex 0.169.0: isolated daemon account switching, settings updates, independent read-back and preserved conversations passed.
+- Loopback model transport: account A → B switched the actual next request, replayed the full conversation, and did not restart the daemon.
+- Loopback model/reasoning change: in-flight request, conversation history and permissions preserved; next turn and resumed conversation used the selected model.
+- Two real Claude sign-ins: A → B → A verified through Claude in disposable configuration/Keychain namespaces. Default CLI authentication and unrelated MCP entries remained unchanged. Temporary test namespaces removed.
+- Installed macOS app: live Codex and Claude usage loaded, a second Claude account connected, provider navigation and persistence verified. The shared Codex connection accepted the real selected account without interrupting its active task.
+- Remote-monitor fixtures cover cumulative Codex counters, repeated Claude message snapshots, cached-token accounting, stale network replies, offline-cache retention, corrupt configuration and separation from account-sharing targets.
+
+## Practical boundaries
+
+Remote collection requires trusted, non-interactive SSH authentication for the selected OS user. Machine totals cover only that user's default Codex and Claude Code log directories; missing or capped logs are shown explicitly. They are not remaining subscription quotas. Actual SSH readings on newly added machines must be checked after authentication is enabled.
+
+Separate/private Codex sessions need their own connection to the shared daemon before following its account. Claude switching applies to Claude Code's default configuration on this Mac; explicitly configured profiles or API-key sessions remain independent. No VPS deployment or remote account sharing was performed as part of machine monitoring.

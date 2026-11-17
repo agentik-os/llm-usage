@@ -18,8 +18,9 @@ LLM Usage is a native Swift app with a monochrome interface, Liquid Glass on mac
 - **Reconnect account** on each account’s page, in its settings and in the right-click menu signs the account in again without removing it. Its name, rollover choice and other settings are kept, and signing in with a different account is refused instead of replacing the saved one.
 - A Claude account whose per-model weekly limit is used up is marked in the list, e.g. **Fable limit reached**, even when its overall weekly limit still has room.
 - Each account’s sign-in email is shown on its page, in Settings and in the account menu; right-click an account to copy it.
+- **On this Mac** lists the local models installed in Ollama with their size and which are in memory, measures each model’s generation speed in tokens per second, and counts the Claude Code, Codex, Hermes and OpenCode sessions running on this Mac.
 - Editable account names and System, Light or Dark appearance independent of macOS.
-- A **Ready for new requests** badge requires an independent account read-back, a successful OpenAI usage request and a running Codex version with the account-switch fix. Accepting a token alone never completes the switch.
+- A **Shared Codex ready** badge requires an independent account read-back, a successful OpenAI usage request and a running Codex version with the account-switch fix. Separate terminals retain a visible warning; they do not make a verified shared connection appear to have failed.
 - **Use this account** targets this Mac, all devices, one VPS, or a custom selection without closing conversations.
 - Choose model and reasoning per device, including open shared Codex conversations; set Full access and YOLO defaults for new conversations.
 - Connected Macs and Linux VPS devices, with per-device confirmations and reconnect retries over SSH.
@@ -34,7 +35,7 @@ LLM Usage is an independent community project, not an official OpenAI or Apple p
 Requirements:
 
 - macOS 13 or newer to run; Xcode 26 or newer to build the native glass interface.
-- A current Codex CLI with device-code authentication and app-server support. Tested on macOS with Codex 0.153.3; the Linux connector was tested with 0.150.1.
+- A current Codex CLI with device-code authentication and app-server support. Connection and live-switch checks pass on macOS with Codex 0.169.0; the Linux connector was tested with 0.150.1.
 - Python 3.9+ for account sharing. Linux devices also need a working systemd user session and SSH access.
 
 ```sh
@@ -46,13 +47,17 @@ ditto "dist/LLM Usage.app" "$HOME/Applications/LLM Usage.app"
 open "$HOME/Applications/LLM Usage.app"
 ```
 
+Finder-launched apps and the background connector discover native, Homebrew and common npm installations (including `~/.local/node/bin`) without sourcing shell startup scripts.
+
 The script builds and locally signs `dist/LLM Usage.app`, and produces `dist/LLM-Usage-Connector.zip`. Locally signed builds are not Apple-notarized. The app icon is included in `Assets/`; its source drawing is `Scripts/make-icon.swift`.
 
 LLM Usage was previously named QuotaBar. Existing bundle identifiers, Keychain entries, account storage paths, and connector service names retain their legacy identifiers so existing sign-ins and devices continue working.
 
 ## Add an account
 
-Click the menu-bar gauge, then **Sign in with OpenAI**. Approve sign-in in your browser and enter the short code shown in LLM Usage. **Copy code** makes it easy to paste. Your account appears after approval; use **+** to add another.
+**Use this Mac’s Codex** connects the ChatGPT sign-in already managed by Codex in `~/.codex`. Usage and identity are read through Codex, and its refresh credentials stay there. Disconnecting this account from LLM Usage leaves Codex signed in. If Codex changes identity, LLM Usage asks you to reconnect instead of displaying another account’s usage.
+
+To connect a separate sign-in, click the menu-bar gauge, then **Sign in with OpenAI**. Approve sign-in in your browser and enter the short code shown in LLM Usage. **Copy code** makes it easy to paste. Your account appears after approval; use **+** to add another.
 
 If device-code login is unavailable for your account or workspace, choose **Use browser sign-in instead**. If loading is interrupted after approval, **Try again** resumes the saved connection.
 
@@ -65,7 +70,7 @@ Usage refreshes every five minutes and when opening stale data. Use the gear to 
 Choose **+ → Claude account…** (or **Connect Claude** on the welcome screen).
 
 - **Use this Mac’s Claude Code** shows the account Claude Code is signed in with. LLM Usage reads that sign-in from the Keychain and leaves renewing it to Claude Code. If that sign-in expires, run `claude` once and refresh. The option is hidden once a connected account already shows Claude Code’s sign-in.
-- **Sign in to another Claude account** runs `claude auth login` in a private configuration directory (`~/Library/Application Support/OpenAIQuotaBar/ClaudeSessions/<id>`). Approve access in your browser, copy the code Claude shows and paste it into LLM Usage. Claude Code must be installed. LLM Usage renews these sign-ins itself. The same account also works in a terminal with `CLAUDE_CONFIG_DIR=<that directory> claude`.
+- **Sign in to another Claude account** runs `claude auth login` in a private configuration directory (`~/Library/Application Support/OpenAIQuotaBar/ClaudeSessions/<id>`). Approve access in your browser; the account appears automatically when Claude completes its callback. If Claude shows an authentication code, paste it into LLM Usage instead. Claude Code must be installed. LLM Usage renews these sign-ins itself. The same account also works in a terminal with `CLAUDE_CONFIG_DIR=<that directory> claude`.
 
 The home screen shows each Claude account’s most limiting window, either the 5-hour session or the weekly limit, together with its reset time. Account details also list per-model weekly limits when Claude provides them. Usage comes from the endpoint Claude Code’s `/usage` reads (`api.anthropic.com/api/oauth/usage`). Anthropic does not document this endpoint, so it may change.
 
@@ -115,6 +120,8 @@ When OpenAI grants Codex rate-limit reset credits, the account’s details show 
 ## Switch accounts across devices
 
 Open an account, choose **This Mac**, **All devices**, **Only <VPS>**, or toggle a custom set of devices, then choose **Use this account**. The selector initially includes all configured devices and reuses the last target set while the app is open. The targets are visible before switching. Each machine keeps its own account choice, including across app restarts. Delivery and verification run independently across devices, so a slow or offline VPS does not hold up the others. Account renewal is shared once per account within each synchronization pass to avoid competing token refreshes. Offline targets retry their latest saved choice; other machines retain theirs.
+
+On first use, **Use this account** sets up the local connector if this Mac is not connected. Installing the connector from the device page also reapplies any pending account selection.
 
 **Your devices** opens immediately with progress. **Retry this device** retries only that device; **Retry pending devices** skips connections already verified. Each check independently reads the actual daemon's token and version, and compatible servers must also complete an authenticated usage request. Failed, missing, mismatched or stale checks cannot display the ready badge. On macOS, a read-only process/socket inventory distinguishes shared Codex terminals from separate terminals. Linux terminal coverage is explicitly unknown; the shared connection can be verified without claiming every remote terminal uses it. Private app servers, other Unix users and in-flight requests remain outside the readiness guarantee.
 
@@ -190,6 +197,20 @@ Codex support for `model/list`, `config/read` and `config/batchWrite`; live upda
 add `thread/loaded/list`, `thread/read` and `thread/settings/update`. Preview mode
 uses in-memory sample settings and never contacts Codex.
 
+## Local models and running agents
+
+Choose **On this Mac** at the bottom of the panel, or **⋯ → Local models and agents…**.
+
+- **Running agents** counts the Claude Code, Codex, Hermes and OpenCode sessions on this Mac from the process list. Helper and daemon processes are not counted.
+- **Local models** reads the Ollama server on `127.0.0.1:11434`: every installed model with its parameter count, quantization and size on disk, and an **In memory** mark on the ones currently loaded.
+- **Measure speed** runs one short generation (96 tokens) with that model and shows the result in tokens per second. The last result is kept in `~/Library/Application Support/OpenAIQuotaBar/local-speeds.json`. Measuring loads the model into memory, so a large model can take a while and may unload another one.
+
+Limits:
+
+- Only Ollama on this Mac is read. Other local servers and models on connected devices are not listed.
+- The speed is one measurement on demand, not a live reading of requests made by your agents.
+- Embedding models are listed without a speed.
+
 ## Account privacy
 
 Each account has an isolated Codex profile under `~/Library/Application Support/OpenAIQuotaBar/Sessions/<UUID>`, with sign-in credentials stored by Codex in macOS Keychain. Existing regular Codex login files are not replaced. LLM Usage obtains expiring access grants for connected devices; refresh credentials stay with the original sign-in. Grants travel through SSH and are stored with private file permissions on the destination.
@@ -201,7 +222,8 @@ Do not publish account files, real-account screenshots, tokens, SSH configuratio
 ## Development and verification
 
 ```sh
-swift test
+# Use the full Xcode toolchain when xcode-select points at CommandLineTools.
+DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer swift test
 python3 -m unittest discover -s Tests/BridgeTests -v
 ./Scripts/package-app.sh
 ```
@@ -257,3 +279,13 @@ QUOTABAR_LIVE_AUTH_TEST=1 swift test --filter CodexTests/testLiveDeviceHandshake
 - [OpenAI: App-server authentication and account APIs](https://learn.chatgpt.com/docs/app-server)
 - [OpenAI: Device-code authentication and credential storage](https://learn.chatgpt.com/docs/auth)
 - [Apple: NSGlassEffectView](https://developer.apple.com/documentation/appkit/nsglasseffectview)
+
+## Monitor other machines without sharing accounts
+
+**Other machines** (from the account overview, **On this Mac**, or **Your devices**) monitors Macs and Linux machines over SSH. Add a name and an existing SSH alias or `user@hostname`. A monitored machine is stored separately from account-switch targets and never receives an account grant, changed provider, restart, or shared sign-in.
+
+The read-only collector reports running Codex, Claude Code, Hermes and OpenCode processes for that SSH user, Ollama models currently in memory, and tokens recorded in Codex/Claude Code session logs over rolling 24-hour and 7-day windows. Cached input is included in totals and also shown separately. Subscription quota is account-wide, so these machine totals are not presented as a remaining balance.
+
+The app sends a Python standard-library collector over SSH; no remote service is needed. It reads only session logs and process/model metadata, never authentication files, and returns no prompts or conversation text. SSH must already work non-interactively with a trusted host key. A dedicated key constrained to a fixed statistics command can be used for unattended monitoring. Host-key verification stays enabled.
+
+Readings refresh every minute while the page is open and every five minutes in the background. A failed connection preserves the last successful reading with an error and timestamp. Scans are bounded; incomplete logs are labeled partial. Only the selected SSH user's default `~/.codex` and `~/.claude` session directories are counted. Custom profile directories and providers without supported local usage logs are outside these totals.

@@ -15,20 +15,14 @@ final class CodexClient {
     private var stopped = false
 
     static func executableURL() throws -> URL {
-        let home = FileManager.default.homeDirectoryForCurrentUser
-        let candidates = [
-            home.appendingPathComponent(".local/bin/codex").path,
-            home.appendingPathComponent(".codex/packages/standalone/current/bin/codex").path,
-            "/opt/homebrew/bin/codex", "/usr/local/bin/codex"
-        ]
-        guard let path = candidates.first(where: FileManager.default.isExecutableFile(atPath:)) else {
+        guard let url = CLIEnvironment.executable("codex") else {
             throw UsageError.message("Install Codex on this Mac, then try signing in again.")
         }
-        return URL(fileURLWithPath: path)
+        return url
     }
 
     static func environment(for home: URL, inherited: [String: String] = ProcessInfo.processInfo.environment) -> [String: String] {
-        var env = inherited
+        var env = CLIEnvironment.environment(inherited: inherited)
         for key in ["OPENAI_API_KEY", "CODEX_API_KEY", "CODEX_ACCESS_TOKEN", "OPENAI_BASE_URL", "CHATGPT_BASE_URL", "CODEX_HOME", "CODEX_MANAGED_BY_NPM", "CODEX_INTERNAL_ORIGINATOR_OVERRIDE"] {
             env.removeValue(forKey: key)
         }
@@ -37,12 +31,13 @@ final class CodexClient {
         return env
     }
 
-    init(home: URL, executable: URL? = nil, prefixArguments: [String] = []) throws {
+    init(home: URL, executable: URL? = nil, prefixArguments: [String] = [], credentialStore: String? = "keyring") throws {
         try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
         process.executableURL = try executable ?? Self.executableURL()
-        process.arguments = prefixArguments + ["-c", "cli_auth_credentials_store=\"keyring\"", "app-server", "--listen", "stdio://"]
+        let storage = credentialStore.map { ["-c", "cli_auth_credentials_store=\"\($0)\""] } ?? []
+        process.arguments = prefixArguments + storage + ["app-server", "--listen", "stdio://"]
         process.currentDirectoryURL = home
-        process.environment = Self.environment(for: home)
+        process.environment = CLIEnvironment.environment(inherited: Self.environment(for: home), executable: process.executableURL)
         process.standardInput = input
         process.standardOutput = output
         // Auth payloads and tokens are never logged by this app.
