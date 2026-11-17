@@ -15,7 +15,7 @@
 ## Validation
 
 - Swift: 88 tests, zero failures, 5 opt-in live tests skipped in the default suite.
-- Python: 50 tests, zero failures, 1 optional environment-dependent test skipped.
+- Python: 53 tests, zero failures, 1 optional environment-dependent test skipped.
 - Real installed Codex 0.169.0: isolated daemon account switching, settings updates, independent read-back and preserved conversations passed.
 - Loopback model transport: account A → B switched the actual next request, replayed the full conversation, and did not restart the daemon.
 - Loopback model/reasoning change: in-flight request, conversation history and permissions preserved; next turn and resumed conversation used the selected model.
@@ -23,7 +23,7 @@
 - Installed macOS app: live Codex and Claude usage loaded, a second Claude account connected, provider navigation and persistence verified. The shared Codex connection accepted the real selected account without interrupting its active task.
 - Remote-monitor fixtures cover cumulative Codex counters, repeated Claude message snapshots, cached-token accounting, stale network replies, offline-cache retention, corrupt configuration and separation from account-sharing targets.
 - Two real remote Macs: unattended SSH collection and display in the installed app verified. A dedicated key is restricted to the checksum-verified collector; an arbitrary requested shell command was replaced by the statistics response on both machines. Installation sessions were closed afterward.
-- Account-quota validation: real local Claude and Codex sign-ins and an additional private Claude profile returned identity and quota windows. Fixtures cover expired credentials, API-key sessions, wrong or changed identities, provider failures, missing quota windows, and secret-free output.
+- Account-quota validation: real local Claude and Codex sign-ins and an additional private Claude profile returned identity and quota windows. Fixtures cover expired credentials, API-key sessions, wrong or changed identities, provider failures, missing quota windows, and secret-free output. Dated saved-Claude readings retain their original timestamp and identity; windows that already reset cannot be presented as current quota.
 
 ## Practical boundaries
 

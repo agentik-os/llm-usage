@@ -131,7 +131,7 @@ struct RemoteMachinesView: View {
                     HStack {
                         Text(window.name).font(.system(size: 10))
                         Spacer()
-                        Text("\(window.remainingPercent.formatted(.number.precision(.fractionLength(0...1))))% remaining")
+                        Text("\(window.remainingPercent.formatted(.number.precision(.fractionLength(0...1))))% remaining\(account.status == "cached" ? " (saved)" : "")")
                             .font(.system(size: 11, weight: .medium)).monospacedDigit()
                     }
                     ProgressView(value: window.fraction).tint(Palette.foreground)
@@ -143,6 +143,10 @@ struct RemoteMachinesView: View {
             }
             if let message = account.message {
                 Text(message).font(.system(size: 10)).foregroundStyle(Palette.secondary).fixedSize(horizontal: false, vertical: true)
+            }
+            if account.checkedAt.isFinite, account.email != nil {
+                Text("Quota checked \(Date(timeIntervalSince1970: account.checkedAt).formatted(date: .abbreviated, time: .shortened))")
+                    .font(.system(size: 9)).foregroundStyle(Palette.muted)
             }
         }.padding(.vertical, 7).accessibilityIdentifier("remote-account-\(account.id)")
     }

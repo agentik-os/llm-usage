@@ -151,3 +151,29 @@ class MonitorTests(unittest.TestCase):
         self.assertEqual(results[1]['status'],'connected')
         self.assertEqual(results[0]['status'],'unavailable')
         self.assertNotIn('PRIVATE',json.dumps(results))
+
+    def test_keychain_unavailable_uses_dated_sanitized_app_snapshot(self):
+        profile=self.profile(saved={'email':'saved@example.com','planType':'Max 20x','lastUpdated':self.now-978307200-60,
+            'claudeUsage':{'session':{'usedPercent':12,'resetsAt':self.now-10},'weekly':{'usedPercent':35,'resetsAt':self.now+1000}},
+            'accessToken':'PRIVATE'})
+        result=monitor.saved_claude_quota(monitor.account_result(profile),profile,now=self.now)
+        self.assertEqual(result['status'],'cached')
+        self.assertEqual(result['checkedAt'],self.now-60)
+        self.assertEqual(len(result['windows']),1)
+        self.assertEqual(result['windows'][0]['remainingPercent'],65)
+        self.assertNotIn('PRIVATE',json.dumps(result))
+
+    def test_cached_quota_is_not_attached_to_a_different_live_identity(self):
+        profile=self.profile(saved={'email':'saved@example.com','lastUpdated':self.now-978307200})
+        result=monitor.account_result(profile);result['email']='live@example.com'
+        result=monitor.saved_claude_quota(result,profile,now=self.now)
+        self.assertEqual(result['email'],'live@example.com')
+        self.assertNotEqual(result['status'],'cached')
+
+    def test_past_reset_cache_keeps_account_without_claiming_remaining_quota(self):
+        profile=self.profile(saved={'email':'saved@example.com','lastUpdated':self.now-978307200-1000,
+            'claudeUsage':{'weekly':{'usedPercent':4,'resetsAt':self.now-100}}})
+        result=monitor.saved_claude_quota(monitor.account_result(profile),profile,now=self.now)
+        self.assertEqual(result['email'],'saved@example.com')
+        self.assertEqual(result['windows'],[])
+        self.assertIn('previous windows have reset',result['message'])

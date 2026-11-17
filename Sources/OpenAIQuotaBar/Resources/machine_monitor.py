@@ -107,7 +107,12 @@ def claude_credentials(home, config_dir=None):
     document = {}
     if platform.system() == 'Darwin':
         try:
-            result = subprocess.run(['/usr/bin/security', 'find-generic-password', '-s', service, '-w'],
+            # SSH login sessions may not inherit the GUI user's keychain search list.
+            keychain = home / 'Library/Keychains/login.keychain-db'
+            args = ['/usr/bin/security', 'find-generic-password', '-s', service, '-w']
+            if keychain.is_file():
+                args.append(str(keychain))
+            result = subprocess.run(args,
                 capture_output=True, timeout=4, check=True)
             document = json.loads(result.stdout)
         except (OSError, ValueError, subprocess.SubprocessError):
@@ -124,13 +129,45 @@ def account_result(profile):
             'plan': None, 'windows': [], 'checkedAt': time.time(), 'message': None}
 
 
+def saved_claude_quota(result, profile, now=None):
+    """A dated app snapshot is useful when SSH cannot access a GUI keychain."""
+    saved = profile.get('saved') or {}
+    email = safe_text(saved.get('email'))
+    checked = saved.get('lastUpdated')
+    if not email or isinstance(checked, bool) or not isinstance(checked, (int, float)) or not math.isfinite(checked):
+        return result
+    # Swift JSONEncoder's default Date representation starts on 2001-01-01.
+    checked += 978307200
+    now = time.time() if now is None else now
+    if checked > now + 300 or checked < 978307200:
+        return result
+    if result.get('email') and result['email'].casefold() != email.casefold():
+        return result
+    usage = saved.get('claudeUsage') or {}
+    windows = []
+    for key, name in [('session', '5-hour'), ('weekly', 'Weekly')]:
+        value = usage.get(key)
+        if isinstance(value, dict):
+            windows.append(quota_window(name, value.get('usedPercent'), value.get('resetsAt')))
+    for scoped in usage.get('scoped') or []:
+        if isinstance(scoped, dict) and isinstance(scoped.get('window'), dict):
+            value = scoped['window']
+            windows.append(quota_window((safe_text(scoped.get('name')) or 'Model')+' · weekly', value.get('usedPercent'), value.get('resetsAt')))
+    # A window that already reset cannot describe the current remaining quota.
+    windows = [w for w in windows if w and (w['resetsAt'] is None or w['resetsAt'] > now)][:12]
+    result.update(status='cached', email=email, plan=safe_text(saved.get('planType')), windows=windows, checkedAt=checked,
+        message='Last reading saved by LLM Usage on this machine. Live quota is unavailable over SSH.' if windows else
+                'Saved account. No current quota is available; its previous windows have reset or were not recorded.')
+    return result
+
+
 def read_claude_account(profile, home):
     result = account_result(profile)
     credentials = claude_credentials(home, profile.get('directory'))
     token = credentials.get('accessToken')
     if not isinstance(token, str) or not token:
         result['message'] = 'Sign-in unavailable. Sign in or unlock the login keychain on this machine.'
-        return result
+        return saved_claude_quota(result, profile)
     try:
         identity = claude_get('profile', token)
         account = identity.get('account') or {}
@@ -156,6 +193,8 @@ def read_claude_account(profile, home):
             result['message'] = 'The provider could not return this quota.'
     except (OSError, ValueError, TypeError, AttributeError):
         result['message'] = 'The provider could not return this quota.'
+    if not result['windows'] and result['status'] != 'expired':
+        return saved_claude_quota(result, profile)
     return result
 
 
@@ -288,6 +327,12 @@ def account_profiles(home):
             if not isinstance(record, dict):
                 continue
             provider = record.get('connection')
+            if provider == 'claude' and not record.get('claudeConfigDir'):
+                identity = json_file(home / '.claude.json').get('oauthAccount') or {}
+                current = safe_text(identity.get('emailAddress'))
+                if current and current.casefold() == (record.get('email') or '').casefold():
+                    profiles[0]['saved'] = record
+                continue
             if provider == 'claude' and record.get('claudeConfigDir'):
                 directory = Path(record['claudeConfigDir'])
             elif provider == 'codex' and not record.get('usesLocalCodex'):
@@ -298,7 +343,7 @@ def account_profiles(home):
                 continue
             profiles.append(dict(id=provider+'-'+hashlib.sha256(str(directory).encode()).hexdigest()[:12],
                 provider=provider, label='LLM Usage · '+(safe_text(record.get('name')) or provider), default=False,
-                directory=str(directory), email=safe_text(record.get('email'))))
+                directory=str(directory), email=safe_text(record.get('email')), saved=record))
     except (OSError, ValueError, TypeError):
         pass
     return profiles[:8]
