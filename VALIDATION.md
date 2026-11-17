@@ -21,9 +21,10 @@
 - Two real Claude sign-ins: A → B → A verified through Claude in disposable configuration/Keychain namespaces. Default CLI authentication and unrelated MCP entries remained unchanged. Temporary test namespaces removed.
 - Installed macOS app: live Codex and Claude usage loaded, a second Claude account connected, provider navigation and persistence verified. The shared Codex connection accepted the real selected account without interrupting its active task.
 - Remote-monitor fixtures cover cumulative Codex counters, repeated Claude message snapshots, cached-token accounting, stale network replies, offline-cache retention, corrupt configuration and separation from account-sharing targets.
+- Two real remote Macs: unattended SSH collection and display in the installed app verified. A dedicated key is restricted to the checksum-verified collector; an arbitrary requested shell command was replaced by the statistics response on both machines. Installation sessions were closed afterward.
 
 ## Practical boundaries
 
-Remote collection requires trusted, non-interactive SSH authentication for the selected OS user. Machine totals cover only that user's default Codex and Claude Code log directories; missing or capped logs are shown explicitly. They are not remaining subscription quotas. Actual SSH readings on newly added machines must be checked after authentication is enabled.
+Remote collection requires trusted, non-interactive SSH authentication for the selected OS user. Machine totals cover only that user's default Codex and Claude Code log directories; missing or capped logs are shown explicitly. They are not remaining subscription quotas. Live validation confirmed that partial totals and a missing Codex log directory remain visible instead of being presented as complete usage.
 
 Separate/private Codex sessions need their own connection to the shared daemon before following its account. Claude switching applies to Claude Code's default configuration on this Mac; explicitly configured profiles or API-key sessions remain independent. No VPS deployment or remote account sharing was performed as part of machine monitoring.
