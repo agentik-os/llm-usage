@@ -1,4 +1,4 @@
-# Connection repair and read-only machine monitoring — 4.9.0
+# Connection repair and read-only machine monitoring — 4.10.0
 
 ## Reproduced failures and corrections
 
@@ -10,11 +10,12 @@
 - First local activation can install the connector; reconnecting it reapplies pending selection. A verified shared connection is labeled **Shared Codex ready**, with separate-terminal limitations displayed independently.
 - Provider names distinguish identically named accounts. Existing local-model features and reconnect affordances are retained.
 - Added a separate monitoring-only machine list: bounded SSH reads of session-token aggregates, running agents and Ollama models. These hosts never enter account sharing or switching targets.
+- Remote account monitoring identifies the default Claude/Codex sign-ins and explicitly saved LLM Usage profiles, with remaining quota percentages and reset dates separate from local token consumption. Provider credentials remain on their original machine; a changed identity cannot inherit another account's quota.
 
 ## Validation
 
-- Swift: 87 tests, zero failures, 5 opt-in live tests skipped in the default suite.
-- Python: 41 tests, zero failures, 1 optional environment-dependent test skipped.
+- Swift: 88 tests, zero failures, 5 opt-in live tests skipped in the default suite.
+- Python: 50 tests, zero failures, 1 optional environment-dependent test skipped.
 - Real installed Codex 0.169.0: isolated daemon account switching, settings updates, independent read-back and preserved conversations passed.
 - Loopback model transport: account A → B switched the actual next request, replayed the full conversation, and did not restart the daemon.
 - Loopback model/reasoning change: in-flight request, conversation history and permissions preserved; next turn and resumed conversation used the selected model.
@@ -22,6 +23,7 @@
 - Installed macOS app: live Codex and Claude usage loaded, a second Claude account connected, provider navigation and persistence verified. The shared Codex connection accepted the real selected account without interrupting its active task.
 - Remote-monitor fixtures cover cumulative Codex counters, repeated Claude message snapshots, cached-token accounting, stale network replies, offline-cache retention, corrupt configuration and separation from account-sharing targets.
 - Two real remote Macs: unattended SSH collection and display in the installed app verified. A dedicated key is restricted to the checksum-verified collector; an arbitrary requested shell command was replaced by the statistics response on both machines. Installation sessions were closed afterward.
+- Account-quota validation: real local Claude and Codex sign-ins and an additional private Claude profile returned identity and quota windows. Fixtures cover expired credentials, API-key sessions, wrong or changed identities, provider failures, missing quota windows, and secret-free output.
 
 ## Practical boundaries
 

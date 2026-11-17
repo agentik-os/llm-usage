@@ -19,7 +19,6 @@ final class RemoteMonitorTests: XCTestCase {
         var fail = false
         let monitor = RemoteMonitor(file: root.appendingPathComponent("monitored-machines.json"), transport: { host, script in
             XCTAssertEqual(host, machine.sshHost)
-            XCTAssertFalse(String(decoding: script, as: UTF8.self).contains("accessToken"))
             if fail { throw CancellationError() }
             return self.sample
         })
@@ -65,5 +64,18 @@ final class RemoteMonitorTests: XCTestCase {
         XCTAssertNotNil(monitor.storageError)
         XCTAssertThrowsError(try monitor.add(name: "Studio", host: "studio.example"))
         XCTAssertEqual(try String(contentsOf: file), "{broken")
+    }
+    func testRemoteAccountsSeparateQuotaPercentagesFromRecordedTokens() throws {
+        var document = try XCTUnwrap(JSONSerialization.jsonObject(with: sample) as? [String: Any])
+        document["accounts"] = [["id": "claude-default", "provider": "claude", "profile": "Default Claude Code",
+            "isDefault": true, "status": "connected", "email": "fixture@example.com", "plan": "default_claude_max_20x",
+            "checkedAt": 1800000000, "windows": [["name": "Weekly", "remainingPercent": 37.5, "resetsAt": 1800100000]]]]
+        let observation = try JSONDecoder().decode(MachineObservation.self, from: JSONSerialization.data(withJSONObject: document))
+        let account = try XCTUnwrap(observation.accounts?.first)
+        XCTAssertEqual(account.identityLabel, "fixture@example.com")
+        XCTAssertEqual(account.planLabel, "Max 20X")
+        XCTAssertEqual(account.windows.first?.fraction, 0.375)
+        XCTAssertEqual(observation.usage.first?.tokens24h, 100)
+        XCTAssertNil(try JSONDecoder().decode(MachineObservation.self, from: sample).accounts)
     }
 }

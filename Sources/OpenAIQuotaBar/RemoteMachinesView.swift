@@ -42,7 +42,7 @@ struct RemoteMachinesView: View {
                             .buttonStyle(.plain).softSurface(radius: 16).accessibilityIdentifier("add-monitored-machine")
                     }
                     if let message = error ?? monitor.storageError { Text(message).font(.caption).foregroundStyle(Palette.secondary) }
-                    Text("Tokens come from Codex and Claude Code session logs on that machine, including cached input. These are recorded usage totals, not a remaining subscription balance. Activity refreshes every minute while this page is open.")
+                    Text("Subscription limits show the percentage remaining for an account across all its machines. Providers do not give an exact remaining token count. Token totals below come from this machine’s session logs, including cached input. Refreshes every minute while this page is open.")
                         .font(.system(size: 10)).foregroundStyle(Palette.secondary).fixedSize(horizontal: false, vertical: true)
                 }.padding(1)
             }.scrollIndicators(.hidden)
@@ -73,6 +73,15 @@ struct RemoteMachinesView: View {
                 } label: { Image(systemName: "ellipsis") }.menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
             }
             if let observation {
+                Text("Accounts & remaining quota").font(.system(size: 12, weight: .semibold))
+                if let accounts = observation.accounts {
+                    ForEach(accounts) { account in accountCard(account) }
+                } else {
+                    Text("Update this machine’s monitor to see its connected accounts and remaining quotas.")
+                        .font(.caption).foregroundStyle(Palette.secondary)
+                }
+                Divider().padding(.vertical, 3)
+                Text("Usage on this machine").font(.system(size: 12, weight: .semibold))
                 if let agents = observation.agents {
                     Text("Running · Codex \(agents["codex"] ?? 0) · Claude \(agents["claude"] ?? 0) · Hermes \(agents["hermes"] ?? 0) · OpenCode \(agents["opencode"] ?? 0)")
                         .font(.system(size: 10)).foregroundStyle(Palette.secondary)
@@ -106,5 +115,35 @@ struct RemoteMachinesView: View {
                 Text(message).font(.system(size: 10)).foregroundStyle(Palette.secondary).fixedSize(horizontal: false, vertical: true)
             } else if observation == nil { Text("Waiting for the first reading…").font(.caption).foregroundStyle(Palette.secondary) }
         }.padding(15).softSurface(radius: 18).accessibilityIdentifier("monitored-machine-\(machine.id)")
+    }
+
+    private func accountCard(_ account: MachineObservation.ConnectedAccount) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(alignment: .firstTextBaseline) {
+                Text(account.providerName).font(.system(size: 11, weight: .semibold))
+                Spacer()
+                if let plan = account.planLabel { Text(plan).font(.system(size: 10)).foregroundStyle(Palette.secondary) }
+            }
+            Text(account.identityLabel).font(.system(size: 11)).textSelection(.enabled)
+            Text(account.profile).font(.system(size: 9)).foregroundStyle(Palette.muted)
+            ForEach(Array(account.windows.enumerated()), id: \.offset) { _, window in
+                VStack(alignment: .leading, spacing: 3) {
+                    HStack {
+                        Text(window.name).font(.system(size: 10))
+                        Spacer()
+                        Text("\(window.remainingPercent.formatted(.number.precision(.fractionLength(0...1))))% remaining")
+                            .font(.system(size: 11, weight: .medium)).monospacedDigit()
+                    }
+                    ProgressView(value: window.fraction).tint(Palette.foreground)
+                    if let reset = window.resetsAt, reset.isFinite {
+                        Text("Resets \(Date(timeIntervalSince1970: reset).formatted(date: .abbreviated, time: .shortened))")
+                            .font(.system(size: 9)).foregroundStyle(Palette.muted)
+                    }
+                }
+            }
+            if let message = account.message {
+                Text(message).font(.system(size: 10)).foregroundStyle(Palette.secondary).fixedSize(horizontal: false, vertical: true)
+            }
+        }.padding(.vertical, 7).accessibilityIdentifier("remote-account-\(account.id)")
     }
 }

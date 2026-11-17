@@ -8,6 +8,35 @@ struct MonitoredMachine: Identifiable, Codable, Equatable {
 }
 
 struct MachineObservation: Codable, Equatable {
+    struct ConnectedAccount: Codable, Equatable, Identifiable {
+        struct Window: Codable, Equatable {
+            var name: String
+            var remainingPercent: Double
+            var resetsAt: Double?
+            var fraction: Double { min(1, max(0, remainingPercent / 100)) }
+        }
+        var id: String
+        var provider: String
+        var profile: String
+        var isDefault: Bool
+        var status: String
+        var email: String?
+        var plan: String?
+        var windows: [Window]
+        var checkedAt: Double
+        var message: String?
+        var providerName: String { provider == "codex" ? "Codex" : "Claude Code" }
+        var identityLabel: String {
+            if let email, !email.isEmpty { return email }
+            if status == "signedOut" { return "Not signed in" }
+            if status == "apiKey" { return "API key session" }
+            return "Account unavailable"
+        }
+        var planLabel: String? {
+            plan?.replacingOccurrences(of: "default_claude_", with: "")
+                .replacingOccurrences(of: "claude_", with: "").replacingOccurrences(of: "_", with: " ").capitalized
+        }
+    }
     struct Usage: Codable, Equatable, Identifiable {
         var provider: String
         var id: String { provider }
@@ -30,6 +59,7 @@ struct MachineObservation: Codable, Equatable {
     var usage: [Usage]
     var partial: Bool
     var sources: [String: Bool]
+    var accounts: [ConnectedAccount]?
 }
 
 /// Monitoring has its own storage and transport. These machines are never targets
