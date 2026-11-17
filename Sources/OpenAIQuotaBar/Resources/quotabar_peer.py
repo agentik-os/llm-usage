@@ -39,6 +39,7 @@ def supports_live_switch(version):
 
 async def compatibility_command(executable):
     process = await asyncio.create_subprocess_exec(executable, "app-server", "daemon", "version",
+        env=cli_environment(executable),
         stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL)
     try:
         raw, _ = await asyncio.wait_for(process.communicate(), 8)
@@ -98,10 +99,21 @@ def validate_grant(value, now=None):
     }
 
 
+def cli_environment(executable=None):
+    env = dict(os.environ)
+    paths = [str(Path.home() / p) for p in (".local/bin", ".local/node/bin", ".npm-global/bin", ".volta/bin", ".bun/bin",
+             ".codex/packages/standalone/current/bin", ".codex/packages/standalone/current")]
+    paths += env.get("PATH", "").split(os.pathsep)
+    paths += ["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin", "/usr/sbin", "/sbin"]
+    if executable:
+        paths.insert(0, str(Path(executable).parent))
+    env["PATH"] = os.pathsep.join(dict.fromkeys(p for p in paths if os.path.isabs(p)))
+    return env
+
+
 def find_codex():
-    for path in (Path.home() / ".local/bin/codex", Path.home() / ".codex/packages/standalone/current/bin/codex",
-                 Path.home() / ".codex/packages/standalone/current/codex", Path("/usr/bin/codex"),
-                 Path("/opt/homebrew/bin/codex"), Path(shutil.which("codex") or "/nonexistent")):
+    for directory in cli_environment()["PATH"].split(os.pathsep):
+        path = Path(directory) / "codex"
         if path.is_file() and os.access(path, os.X_OK):
             return str(path)
     raise RuntimeError("Install a current Codex CLI on this device first.")
@@ -126,7 +138,7 @@ class CodexConnection:
         if self.connected:
             return
         await self.close()
-        env = dict(os.environ)
+        env = cli_environment(self.executable)
         for key in ("OPENAI_API_KEY", "CODEX_API_KEY", "CODEX_ACCESS_TOKEN", "CODEX_HOME", "OPENAI_BASE_URL", "CHATGPT_BASE_URL"):
             env.pop(key, None)
         env["RUST_LOG"] = "off"
@@ -497,6 +509,7 @@ def install():
         agent = Path.home() / "Library/LaunchAgents/com.quotabar.peer.plist"
         agent.parent.mkdir(parents=True, exist_ok=True)
         payload = {"Label": "com.quotabar.peer", "ProgramArguments": [sys.executable, str(dest), "serve", "--codex", codex],
+                   "EnvironmentVariables": {"PATH": cli_environment(codex)["PATH"]},
                    "RunAtLoad": True, "KeepAlive": True, "ThrottleInterval": 10,
                    "StandardOutPath": "/dev/null", "StandardErrorPath": "/dev/null"}
         agent.write_bytes(plistlib.dumps(payload))
@@ -510,6 +523,7 @@ def install():
         # Paths come from this installation, not untrusted command input.
         quote = lambda v: '"' + str(v).replace('\\', '\\\\').replace('"', '\\"').replace('%', '%%') + '"'
         unit.write_text('[Unit]\nDescription=LLM Usage account connector\nAfter=default.target\n\n[Service]\n'
+            + 'Environment=' + quote('PATH=' + cli_environment(codex)["PATH"]) + '\n'
             + 'ExecStart=' + ' '.join(map(quote, [sys.executable, dest, "serve", "--codex", codex]))
             + '\nRestart=on-failure\nRestartSec=5\nUMask=0077\nNoNewPrivileges=true\n\n[Install]\nWantedBy=default.target\n')
         subprocess.run(["systemctl", "--user", "daemon-reload"], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -769,6 +783,7 @@ async def verification_command(args, request, reconnect=False):
         # send input to terminals, or rewrite their private saved authentication.
         await codex.close()
         process = await asyncio.create_subprocess_exec(executable, "app-server", "daemon", "restart",
+            env=cli_environment(executable),
             stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL)
         try:
             await asyncio.wait_for(process.wait(), 20)

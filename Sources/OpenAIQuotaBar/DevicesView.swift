@@ -6,11 +6,12 @@ struct ActiveAccountBadge: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var appeared = false
     var body: some View {
-        Label(compact ? "Ready" : "Ready for new requests", systemImage: "checkmark.circle.fill")
+        Label(compact ? "Shared ready" : "Shared Codex ready", systemImage: "checkmark.circle.fill")
             .font(.system(size: 10, weight: .semibold))
             .scaleEffect(appeared ? 1 : 0.8).opacity(appeared ? 1 : 0)
             .onAppear { withAnimation(reduceMotion ? nil : .spring(response: 0.4, dampingFraction: 0.6)) { appeared = true } }
-            .help("Account and live switching verified on: \(names)").accessibilityLabel("Account and live switching verified on \(names)")
+            .help("Shared Codex account and access verified on: \(names). Separate terminals may use their own account.")
+            .accessibilityLabel("Shared Codex account and access verified on \(names)")
     }
 }
 
@@ -37,7 +38,7 @@ struct AccountSwitchButton: View {
                     }))
                 }
             } label: {
-                Label(targets.count == pool.devices.count ? "All devices" : pool.devices.filter { targets.contains($0.id) }.map(\.name).joined(separator: ", ").nonEmptyTarget,
+                Label(targets == [PoolDevice.local.id] ? "This Mac" : targets.count == pool.devices.count ? "All devices" : pool.devices.filter { targets.contains($0.id) }.map(\.name).joined(separator: ", ").nonEmptyTarget,
                       systemImage: "desktopcomputer")
                     .font(.system(size: 11)).lineLimit(2)
             }.disabled(pool.isWorking).accessibilityIdentifier("switch-targets")
@@ -70,6 +71,7 @@ private extension String {
 }
 
 struct DevicesView: View {
+    @EnvironmentObject private var store: Store
     @EnvironmentObject private var pool: AccountPool
     @State private var adding = false
     @State private var reconnecting: PoolDevice?
@@ -100,6 +102,9 @@ struct DevicesView: View {
                             .accessibilityIdentifier("retry-pending-devices")
                     }
                     ForEach(pool.devices) { device in deviceCard(device) }
+                    Button { pool.showingDevices = false; store.showingRemote = true } label: {
+                        Label("Monitor other machines", systemImage: "network").frame(maxWidth: .infinity).padding(.vertical, 12)
+                    }.buttonStyle(.plain).softSurface(radius: 16).accessibilityIdentifier("remote-machines")
                     if adding {
                         ConnectDeviceView { adding = false }
                     } else {

@@ -197,7 +197,7 @@ final class PoolTests: XCTestCase {
             "standaloneAgkSessions": 0, "checkedAt": checkedAt]])
     }
 
-    @MainActor func testSwitchRequiresFreshMatchingBackendVerificationAndNoSeparateTerminals() async throws {
+    @MainActor func testSwitchRequiresFreshMatchingBackendVerificationAndReportsSeparateTerminals() async throws {
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent("llm-verify-\(UUID())")
         defer { try? FileManager.default.removeItem(at: dir) }
         let pool = AccountPool(file: dir.appendingPathComponent("pool.json"))
@@ -220,7 +220,12 @@ final class PoolTests: XCTestCase {
         }
         await pool.use(Account.samples[0])
         XCTAssertEqual(pool.confirmedCount, 1)
-        for failure in ["rejected", "separate", "stale", "unavailable", "mismatch"] {
+        state = "separate"
+        await pool.retry(.local)
+        XCTAssertEqual(pool.confirmedCount, 1, "the shared connection is verified independently of separate terminals")
+        XCTAssertTrue(pool.label(for: .local).contains("other terminals remain"))
+        XCTAssertEqual(pool.connections[PoolDevice.local.id]?.verification?.needsTerminalReconnect, true)
+        for failure in ["rejected", "stale", "unavailable", "mismatch"] {
             state = failure
             await pool.retry(.local)
             XCTAssertEqual(pool.confirmedCount, 0, failure)
@@ -269,6 +274,32 @@ final class PoolTests: XCTestCase {
         grantReads = 0
         await pool.synchronize()
         XCTAssertEqual(grantReads, 1, "Renew one account once even when several devices use it")
+    }
+
+    @MainActor func testFirstLocalSwitchInstallsMissingConnectorBeforeSendingGrant() async throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("llm-first-switch-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let pool = AccountPool(file: dir.appendingPathComponent("pool.json"))
+        var commands: [String] = []
+        pool.grantProvider = { id, selection in
+            PoolGrant(selectionID: selection, accountID: id.uuidString, name: "Fixture", accessToken: "fake", chatgptAccountId: "fake", planType: "pro")
+        }
+        pool.transport = { _, command, input in
+            commands.append(command)
+            if command == "status" { throw UsageError.message("Connector unavailable") }
+            if command == "install" { return Data(#"{"ok":true,"result":{"installed":true}}"#.utf8) }
+            if command == "verify-switch" {
+                return try self.verification(JSONDecoder().decode(DeviceSelection.self, from: XCTUnwrap(input)))
+            }
+            let request = try JSONSerialization.jsonObject(with: XCTUnwrap(input)) as! [String: Any]
+            let grant = request["grant"] as! [String: Any]
+            return try JSONSerialization.data(withJSONObject: ["ok": true, "result": [
+                "accountID": grant["accountID"]!, "selectionID": grant["selectionID"]!, "state": "active", "codexConnected": true]])
+        }
+        await pool.synchronize()
+        await pool.use(Account.samples[0])
+        XCTAssertEqual(commands, ["status", "install", "rpc", "verify-switch"])
+        XCTAssertEqual(pool.confirmedCount, 1)
     }
 
     @MainActor func testRemoteSelectedAccountCannotBeDisconnectedAndPreviewNeverContactsCodex() async throws {

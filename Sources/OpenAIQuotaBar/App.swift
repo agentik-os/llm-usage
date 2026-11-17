@@ -75,6 +75,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             if arguments.contains("--detail"), let account = store.selectedAccount { store.openAccount(account) }
             if arguments.contains("--settings") { store.showingSettings = true }
             if arguments.contains("--devices") { store.pool.showingDevices = true }
+            if arguments.contains("--local") { store.showingLocal = true }
             if arguments.contains("--account-settings") {
                 let sample = Account.samples[0]
                 try? store.saveAccount(sample, key: "")
@@ -134,6 +135,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         if !preview {
             store.pool.start()
+            Task { await store.remoteMonitor.refreshAll() }
             Task { await store.synchronizeHermes() }
             hermesSyncTimer = Timer.scheduledTimer(withTimeInterval: 60, repeats: true) { [weak self] _ in
                 Task { @MainActor in await self?.store.synchronizeHermes() }
@@ -148,7 +150,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 button.toolTip = "LLM Usage · Accounts and usage"
             }
             refreshTimer = Timer.scheduledTimer(withTimeInterval: 300, repeats: true) { [weak self] _ in
-                Task { @MainActor in await self?.store.refreshStale() }
+                Task { @MainActor in await self?.store.refreshStale(); await self?.store.remoteMonitor.refreshAll() }
             }
             rolloverTimer = Timer.scheduledTimer(withTimeInterval: 120, repeats: true) { [weak self] _ in
                 Task { @MainActor in await self?.store.rolloverTick() }
@@ -160,8 +162,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             if event.type == .keyDown, self.panel.isVisible {
                 if event.keyCode == 53 {
                     if self.store.pool.showingDevices { self.store.pool.showingDevices = false }
+                    else if self.store.showingRemote { self.store.showingRemote = false }
                     else if self.store.isSigningIn { self.store.cancelSignIn() }
+                    else if self.store.claudeConnect != nil { self.store.cancelClaudeConnect() }
                     else if self.store.showingEditor { self.store.closeEditor() }
+                    else if self.store.showingLocal { self.store.showingLocal = false }
                     else if self.store.showingSettings { self.store.showingSettings = false }
                     else if self.store.showingAccountDetails { self.store.showHome() }
                     else { self.hidePanel() }
@@ -198,7 +203,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             if clickMonitor == nil {
                 clickMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] _ in
                     Task { @MainActor in
-                        guard let self, !self.store.isSigningIn else { return }
+                        guard let self, !self.store.isSigningIn, self.store.claudeConnect == nil else { return }
                         self.hidePanel()
                     }
                 }

@@ -85,7 +85,7 @@ struct ClaudeConnectView: View {
     }
     private var subtitle: String {
         switch store.claudeConnect {
-        case .waiting: return "Approve access, then copy the code\nClaude shows and paste it here."
+        case .waiting: return "Finish signing in in your browser.\nIf Claude shows a code, paste it here."
         case .verifying: return "Reading your plan and usage."
         case .failed(let message): return message
         case .starting: return "Preparing a private sign-in."

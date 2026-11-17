@@ -21,6 +21,8 @@ struct Account: Identifiable, Codable, Equatable {
     var error: String?
     var connection: Connection?
     var authSessionID: UUID?
+    /// Observe the existing Codex sign-in; never copy its refresh token or log it out.
+    var usesLocalCodex: Bool?
     var email: String?
     var planType: String?
     var codexUsage: CodexUsage?

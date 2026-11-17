@@ -45,8 +45,9 @@ struct CodexTokenUsage: Codable, Equatable {
 extension Account {
     /// Name with the sign-in email, for menus where several accounts are listed together.
     var menuTitle: String {
-        guard let email, !email.isEmpty, email != name else { return name }
-        return "\(name) · \(email)"
+        let label = "\(name) · \(provider.rawValue)"
+        guard let email, !email.isEmpty, email != name else { return label }
+        return "\(label) · \(email)"
     }
     var isCodex: Bool { connection == .codex }
     var isClaude: Bool { connection == .claude }

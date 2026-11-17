@@ -156,7 +156,7 @@ struct ConnectedAccountView: View {
                         removing = false
                     }
                 }
-            } message: { Text(account.isClaude && account.claudeConfigDir == nil ? "Claude Code stays signed in on this Mac." : "This only signs the account out of LLM Usage.") }
+            } message: { Text(account.usesLocalCodex == true ? "Codex stays signed in on this Mac." : account.isClaude && account.claudeConfigDir == nil ? "Claude Code stays signed in on this Mac." : "This only signs the account out of LLM Usage.") }
     }
 
     private func saveName() {
